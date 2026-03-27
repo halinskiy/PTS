@@ -1,0 +1,8 @@
+.DS_Store
+.build/
+.swiftpm/
+Dist/
+PTS.app/
+*.dmg
+.env
+.signing.env
