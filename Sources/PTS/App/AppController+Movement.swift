@@ -78,6 +78,26 @@ extension AppController {
             windowTracker.pollUpdate()
         }
 
+        // Refresh all visible window frames for thrown-state landing (5x/s)
+        if now - lastVisibleWindowsCheck > 0.2 {
+            lastVisibleWindowsCheck = now
+            visibleWindowFrames = WindowInfo.getAllFrames()
+
+            // If pet is on a non-frontmost window, detect if that window was closed
+            if level == .window, let petWin = petWindowFrame, petWin != activeWindowFrame {
+                let stillExists = visibleWindowFrames.contains {
+                    abs($0.midX - petWin.midX) < 60 && abs($0.midY - petWin.midY) < 60
+                }
+                if !stillExists {
+                    mascot.velocityX = 0
+                    mascot.velocityY = 0
+                    mascot.setExpression(.scared)
+                    mascot.seekActiveWindow = true
+                    stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
+                }
+            }
+        }
+
         if !dockVisible {
             lastActivityTime = now
             return
@@ -96,15 +116,21 @@ extension AppController {
             applesEatenThisFrame = 0
             recentInteractionCount = max(0, recentInteractionCount - 0.1)
 
-            // Apply mood to walk speed
+            // Apply mood + time-of-day to walk speed
             let moodMultiplier = moodSystem.overallMood.walkSpeedMultiplier
-            mascot.walkSpeed = 200 * CGFloat(moodMultiplier)
+            let timeMultiplier = TimeOfDay.current.walkSpeedMultiplier
+            mascot.walkSpeed = 200 * CGFloat(moodMultiplier) * CGFloat(timeMultiplier)
 
             // Mood-based idle expression (only if no active expression)
             if mascot.expressionDuration == 0 && mascot.currentExpression == .neutral {
-                let moodExpr = moodSystem.overallMood.preferredExpression
-                if moodExpr != .neutral {
-                    mascot.setExpression(moodExpr)
+                // Claude Code companion: occasionally look thoughtful when Claude is running
+                if systemMonitor.isClaudeRunning && !mascot.isAsleep && Int.random(in: 0..<20) == 0 {
+                    mascot.setExpression(.thinking, duration: 2.0)
+                } else {
+                    let moodExpr = moodSystem.overallMood.preferredExpression
+                    if moodExpr != .neutral {
+                        mascot.setExpression(moodExpr)
+                    }
                 }
             }
         }
@@ -124,6 +150,40 @@ extension AppController {
 
         let mouseLocation = NSEvent.mouseLocation
         let mouseX = mouseLocation.x
+
+        // Cursor velocity tracking
+        let cdx = mouseLocation.x - prevCursorX
+        let cdy = mouseLocation.y - prevCursorY
+        cursorSpeed = cursorSpeed * 0.7 + sqrt(cdx * cdx + cdy * cdy) / max(0.001, dt) * 0.3
+        prevCursorX = mouseLocation.x
+        prevCursorY = mouseLocation.y
+
+        // Cursor reactions (only when awake and idle)
+        if !mascot.isDragged && !mascot.isThrown && !mascot.isAsleep && jumpPhase == .none {
+            let distToPet = sqrt(pow(mouseLocation.x - crabX, 2) + pow(mouseLocation.y - crabY - spriteH * 0.5, 2))
+
+            // Fast cursor flying past → surprised flinch
+            if cursorSpeed > 2000 && distToPet < 120 && now - lastReactionTime > 2 {
+                lastReactionTime = now
+                mascot.setExpression(.surprised, duration: 0.8)
+                let flinchDir: CGFloat = mouseLocation.x > crabX ? -0.06 : 0.06
+                claudeView.rotation = flinchDir
+            }
+
+            // Cursor idle near pet → approach to "sniff"
+            if distToPet < 150 && cursorSpeed < 30 {
+                cursorIdleNearPetTimer += dt
+                if cursorIdleNearPetTimer > 5 && autoTargetX == nil && !isSeekingApples && !isAutonomousMode {
+                    let approachDir: CGFloat = mouseLocation.x > crabX ? 1 : -1
+                    autoTargetX = mouseLocation.x - approachDir * 30
+                    mascot.setExpression(.thinking, duration: 1.5)
+                    cursorIdleNearPetTimer = -10 // cooldown
+                }
+            } else {
+                cursorIdleNearPetTimer = max(0, cursorIdleNearPetTimer)
+                if cursorSpeed > 50 { cursorIdleNearPetTimer = 0 }
+            }
+        }
 
         // If mascot is being dragged or thrown, run state machine and skip normal movement
         if mascot.isDragged || mascot.isThrown {
@@ -166,23 +226,47 @@ extension AppController {
         }
 
         let timeSinceMove = now - lastMouseMoveTime
-        if !isSeekingApples, let pending = pendingTargetX, abs(mouseX - pending) > 2 {
-            lastMouseMoveTime = now
-            mouseSettled = false
-            if !isAsleep {
-                lastActivityTime = now
-                if claudeView.sitAmount > 0.1 {
-                    wakingUp = true
+        if let pending = pendingTargetX, abs(mouseX - pending) > 2 {
+            if !isSeekingApples {
+                lastMouseMoveTime = now
+                mouseSettled = false
+                if !isAsleep {
+                    lastActivityTime = now
+                    if claudeView.sitAmount > 0.1 {
+                        wakingUp = true
+                    }
                 }
+            }
+            // Any mouse movement counts as user activity
+            if isAutonomousMode {
+                exitAutonomousMode(now: now)
+            } else {
+                lastUserActivityTime = now
             }
         }
         pendingTargetX = mouseX
+
+        updateAutonomousMode(now: now)
 
         if wakingUp && claudeView.sitAmount < 0.05 {
             wakingUp = false
         }
 
         if isAsleep {
+            // Wake up and scoot away if cursor lingers for 2s
+            if mascot.isHovered && CACurrentMediaTime() - mascot.hoverStartTime > 2.0 {
+                mascot.isAsleep = false
+                mascot.wakingUp = true
+                mascot.lastActivityTime = now
+                mascot.setExpression(.surprised, duration: 1.5)
+                let awayDir: CGFloat = mouseX >= crabX ? -1 : 1
+                let minX = currentMinX()
+                let maxX = currentMaxX()
+                autoTargetX = awayDir < 0
+                    ? max(minX, crabX - CGFloat.random(in: 180...320))
+                    : min(maxX, crabX + CGFloat.random(in: 180...320))
+                mascot.hoverStartTime = now
+            }
             updateVisuals(dt, isWalking: false)
             positionSprite()
             return
@@ -209,12 +293,16 @@ extension AppController {
             } else {
                 autoTargetX = nil
             }
-        } else {
+        } else if !isAutonomousMode {
+            // Stop ~80px to the side of the cursor so the mascot doesn't block clicks
+            let cursorStopOffset: CGFloat = 80
+            let approachDir: CGFloat = mouseX >= crabX ? 1 : -1
+            let mouseTargetX = max(screenLeft, min(screenRight, mouseX - approachDir * cursorStopOffset))
+
             if !mouseSettled && timeSinceMove > settleDelay {
                 mouseSettled = true
-                let targetX = max(screenLeft, min(screenRight, mouseX))
-                if abs(targetX - crabX) > autoThresh * 2 {
-                    autoTargetX = targetX
+                if abs(mouseTargetX - crabX) > autoThresh * 2 {
+                    autoTargetX = mouseTargetX
                 }
             }
 
@@ -222,7 +310,7 @@ extension AppController {
                 if abs(mouseX - target) > 80 {
                     autoTargetX = nil
                 } else {
-                    autoTargetX = max(screenLeft, min(screenRight, mouseX))
+                    autoTargetX = mouseTargetX
                 }
             }
         }
@@ -247,9 +335,12 @@ extension AppController {
                 }
             }
 
+            // When seeking apples: only jump up if the apple is actually ON the dock.
+            // Using target X alone causes a loop when the apple is on the ground
+            // but happens to be horizontally inside the dock's range.
             let shouldTransitionUpToDock = level == .ground && (
-                (target >= dockLeft && target <= dockRight)
-                    || (isSeekingApples && pathCrossesDockOnGround(from: crabX, to: target))
+                (!isSeekingApples && target >= dockLeft && target <= dockRight)
+                    || (isSeekingApples && currentAppleSeekTargetLevel() == .dock)
             )
             if shouldTransitionUpToDock {
                 let entryDir = dockEntryDirection(for: target)
@@ -297,10 +388,26 @@ extension AppController {
                 }
             }
 
-            if level == .window, let winFrame = activeWindowFrame {
+            if level == .window, let winFrame = petWindowFrame ?? activeWindowFrame {
                 if target < winFrame.minX || target > winFrame.maxX {
                     let exitDir: CGFloat = target < winFrame.minX ? -1 : 1
-                    startJump(down: true, direction: exitDir)
+
+                    // 30% chance: climb down the window side instead of jumping
+                    if Float.random(in: 0...1) < 0.3 {
+                        mascot.wallSide = exitDir < 0 ? -1 : 1
+                        mascot.wallClimbDir = -1  // start going down
+                        stateMachine.forceTransition(to: StateKey.wallClimb, mascot: mascot)
+                        updateVisuals(dt, isWalking: false)
+                        positionSprite()
+                        return
+                    }
+
+                    // Try to hop directly to an adjacent window
+                    if let adjWin = adjacentWindowForHop(from: winFrame, direction: exitDir) {
+                        hopToWindow(adjWin, direction: exitDir)
+                    } else {
+                        startJump(down: true, direction: exitDir)
+                    }
                     updateVisuals(dt, isWalking: false)
                     positionSprite()
                     return
@@ -311,7 +418,17 @@ extension AppController {
             if abs(dx) > autoThresh {
                 let dir: CGFloat = dx > 0 ? 1 : -1
                 let activeWalkSpeed = isSeekingApples ? mascot.walkSpeed * 1.6 : mascot.walkSpeed
-                let nextX = crabX + dir * min(activeWalkSpeed * dt, abs(dx))
+                // Decelerate in the last 80px for smooth stopping (not during apple seek)
+                let decelDistance: CGFloat = 80
+                let decelFactor: CGFloat
+                if isSeekingApples {
+                    decelFactor = 1.0
+                } else if abs(dx) < decelDistance {
+                    decelFactor = max(0.15, abs(dx) / decelDistance)
+                } else {
+                    decelFactor = 1.0
+                }
+                let nextX = crabX + dir * min(activeWalkSpeed * decelFactor * dt, abs(dx))
 
                 if level == .dock && onDockArea
                     && (nextX < dockLeft + jumpOffMargin || nextX > dockRight - jumpOffMargin)
@@ -342,6 +459,11 @@ extension AppController {
                         at: CGPoint(x: crabX, y: crabY + 4),
                         direction: dir
                     )
+                }
+
+                // Footprints every ~40px
+                if Int(abs(crabX)) % 40 < 3 {
+                    particleSystem?.emitFootprint(at: CGPoint(x: crabX, y: crabY))
                 }
 
                 if crabX >= minX && crabX <= maxX {
@@ -383,11 +505,24 @@ extension AppController {
         if mascot.isHovered && !mascot.isDragged && !mascot.isThrown && jumpPhase == .none && !mascot.isSqueezing {
             mascot.hoverIntensity = min(1, mascot.hoverIntensity + dt * 4)
             claudeView.bodyBob += mascot.hoverIntensity * SCALE * 0.3
+            let hoverElapsed = CACurrentMediaTime() - mascot.hoverStartTime
             // After hovering 0.8s, show curious expression
-            if CACurrentMediaTime() - mascot.hoverStartTime > 0.8 {
+            if hoverElapsed > 0.8 {
                 if mascot.effectiveExpression == .neutral {
                     mascot.setExpression(.thinking, duration: 0)
                 }
+            }
+            // After hovering 2s with no interaction → scoot away
+            if hoverElapsed > 2.0 && autoTargetX == nil && !isSeekingApples && !isAsleep && !wakingUp {
+                let awayDir: CGFloat = mouseX >= crabX ? -1 : 1
+                let minX = currentMinX()
+                let maxX = currentMaxX()
+                let targetX = awayDir < 0
+                    ? max(minX, crabX - CGFloat.random(in: 180...320))
+                    : min(maxX, crabX + CGFloat.random(in: 180...320))
+                autoTargetX = targetX
+                mascot.setExpression(.surprised, duration: 1.2)
+                mascot.hoverStartTime = now  // reset so it doesn't re-trigger immediately
             }
         } else {
             mascot.hoverIntensity = max(0, mascot.hoverIntensity - dt * 3)
@@ -406,11 +541,13 @@ extension AppController {
             claudeView.currentLegs = legsSquish
         }
 
-        // Window stickiness: if on window, follow its movement
-        if level == .window, let winFrame = activeWindowFrame {
-            crabY = windowFloorY
-            if crabX < winFrame.minX - 2 { crabX = winFrame.minX - 2 }
-            if crabX > winFrame.maxX + 2 { crabX = winFrame.maxX + 2 }
+        // Window stickiness: snap to pet's actual window floor (not the frontmost window)
+        if level == .window {
+            crabY = petWindowFloorY
+            if let petWin = petWindowFrame {
+                if crabX < petWin.minX - 2 { crabX = petWin.minX - 2 }
+                if crabX > petWin.maxX + 2 { crabX = petWin.maxX + 2 }
+            }
         }
 
         positionSprite()
@@ -527,6 +664,8 @@ extension AppController {
                 crabY = jumpEndY
                 jumpPhase = .none
                 level = .window
+                petWindowFrame = activeWindowFrame  // now on the frontmost window
+                petWindowFloorY = windowFloorY
                 claudeView.armsRaised = false
                 claudeView.currentLegs = legsIdle
                 claudeView.rotation = 0
@@ -560,10 +699,14 @@ extension AppController {
                 jumpTimer = 0
                 if jumpEndY == dockFloorY {
                     level = .dock
+                    petWindowFrame = nil
                 } else if jumpEndY == windowFloorY && activeWindowFrame != nil {
                     level = .window
+                    petWindowFrame = activeWindowFrame   // landed on the frontmost window
+                    petWindowFloorY = windowFloorY
                 } else {
                     level = .ground
+                    petWindowFrame = nil
                 }
             }
 
@@ -580,7 +723,7 @@ extension AppController {
                 settleTimer = 0
                 mouseSettled = false
                 lastMouseMoveTime = CACurrentMediaTime()
-                // Landing dust
+                if level != .window { petWindowFrame = nil }
                 particleSystem?.emitDust(at: CGPoint(x: crabX, y: crabY), count: 4)
                 return
             }
@@ -722,6 +865,30 @@ extension AppController {
             let sway = sin(breatheTimer * 0.7) * 0.015
             claudeView.rotation = sway // set, not accumulate
         }
+
+        // App-specific body language (overrides idle sway when active)
+        if activeAppBehavior != .none && !isWalking && !isAsleep && jumpPhase == .none
+            && !mascot.isDragged && !mascot.isThrown {
+            appBehaviorTimer += dt
+            if appBehaviorTimer < 30 { // active for 30s after app switch
+                switch activeAppBehavior {
+                case .watching:
+                    claudeView.rotation = 0.03
+                    claudeView.sitAmount += (0.3 - claudeView.sitAmount) * min(1, 3 * dt)
+                case .coding:
+                    // Fast "typing" leg alternation
+                    let typeCycle = Int(appBehaviorTimer * 12)
+                    claudeView.legFrame = typeCycle % 2
+                    claudeView.currentLegs = claudeView.legFrame == 0 ? legsIdle : legsWalk
+                    claudeView.sitAmount += (0.35 - claudeView.sitAmount) * min(1, 3 * dt)
+                case .vibing:
+                    claudeView.rotation = sin(breatheTimer * .pi) * 0.025
+                default: break
+                }
+            } else {
+                activeAppBehavior = .none
+            }
+        }
     }
 
     func positionSprite() {
@@ -740,7 +907,53 @@ extension AppController {
         if jumpPhase != .none {
             return min(jumpStartY, jumpEndY)
         }
-        if level == .window { return windowFloorY }
+        if level == .window { return petWindowFloorY }
         return level == .dock ? dockFloorY : groundFloorY
+    }
+
+    // MARK: - Window-to-window hop
+
+    /// Returns a nearby visible window in the given direction that the pet can hop to directly.
+    func adjacentWindowForHop(from currentFrame: NSRect, direction: CGFloat) -> NSRect? {
+        let maxHopDist: CGFloat = 460
+        let maxHeightDiff: CGFloat = 260
+        let currentFloor = computeWindowFloorY(for: currentFrame)
+
+        let candidates = visibleWindowFrames.filter { f in
+            guard f != currentFrame, f.width > 60 else { return false }
+            // Window must be ahead in the right direction
+            let gap: CGFloat = direction > 0
+                ? f.minX - currentFrame.maxX
+                : currentFrame.minX - f.maxX
+            guard gap > -40 && gap < maxHopDist else { return false }
+            // Not too far vertically
+            return abs(computeWindowFloorY(for: f) - currentFloor) < maxHeightDiff
+        }
+
+        return candidates.min { a, b in
+            let da = direction > 0 ? a.minX - currentFrame.maxX : currentFrame.minX - a.maxX
+            let db = direction > 0 ? b.minX - currentFrame.maxX : currentFrame.minX - b.maxX
+            return da < db
+        }
+    }
+
+    /// Throw the pet from its current window toward an adjacent window.
+    /// ThrownState physics + visibleWindowFrames will handle the actual landing.
+    func hopToWindow(_ targetFrame: NSRect, direction: CGFloat) {
+        let targetFloor = computeWindowFloorY(for: targetFrame)
+        let heightDiff = targetFloor - crabY   // positive = target is higher
+
+        // Horizontal velocity: scaled by distance
+        let gap: CGFloat = direction > 0
+            ? targetFrame.minX - (petWindowFrame?.maxX ?? crabX)
+            : (petWindowFrame?.minX ?? crabX) - targetFrame.maxX
+        let hopDist = max(60, gap + 60)
+        mascot.velocityX = direction * max(350, hopDist * 5.5)
+
+        // Vertical velocity: enough to clear the gap height + a small arc
+        mascot.velocityY = max(220, 260 - heightDiff * 0.7)
+
+        mascot.setExpression(.excited, duration: 1.2)
+        stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
     }
 }

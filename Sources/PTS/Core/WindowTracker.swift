@@ -46,6 +46,31 @@ final class WindowTracker {
         }
     }
 
+    /// Switch tracking to a specific app by PID (e.g., when mascot lands on a non-frontmost window).
+    func trackPID(_ pid: pid_t) {
+        guard pid != 0, pid != trackedPID else { return }
+
+        let appEl = AXUIElementCreateApplication(pid)
+        var window: CFTypeRef?
+        AXUIElementCopyAttributeValue(appEl, kAXFocusedWindowAttribute as CFString, &window)
+
+        guard let winEl = window as! AXUIElement? else { return }
+
+        removeObserver()
+        trackedPID = pid
+        trackedWindow = winEl
+
+        setupObserver(for: winEl, pid: pid)
+
+        let frame = readWindowFrame(winEl)
+        lastKnownFrame = frame
+        previousFrame = frame
+        lastFrameTime = CACurrentMediaTime()
+        frameDelta = .zero
+        frameVelocity = .zero
+        // Don't fire onWindowChanged — the caller already placed the mascot on this window
+    }
+
     func updateTrackedWindow() {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
             clearTracking()

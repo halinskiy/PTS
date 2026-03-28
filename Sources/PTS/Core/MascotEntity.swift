@@ -54,6 +54,15 @@ final class MascotEntity {
     var hoverStartTime: TimeInterval = 0
     var hoverIntensity: CGFloat = 0 // 0..1, ramps up smoothly
 
+    // Edge sitting
+    var isEdgeSitting = false
+    var edgeSitTimer: CGFloat = 0
+    var legSwingPhase: CGFloat = 0
+
+    // Wall climbing state
+    var wallSide: Int = 0  // -1 left, +1 right, 0 none
+    var wallClimbDir: CGFloat = 0  // +1 up, -1 down, 0 hanging
+
     // Squeeze (mouse-down hold)
     var isSqueezing = false
     var squeezeStartTime: TimeInterval = 0
@@ -95,7 +104,7 @@ final class MascotEntity {
     let landDur: CGFloat = 0.08
     let jumpArcHeight: CGFloat = 60
     let jumpHorizontalDistance: CGFloat = 180
-    let autoThresh: CGFloat = 15
+    let autoThresh: CGFloat = 5
     let settleDelay: TimeInterval = 0.52
 
     // MARK: - Expression Management

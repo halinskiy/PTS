@@ -34,9 +34,16 @@ final class ParticleView: NSView {
             drawStar(ctx: ctx, size: s)
         case .sweat:
             drawSweat(ctx: ctx, size: s)
+        case .footprint:
+            drawFootprint(ctx: ctx, size: s)
         }
 
         ctx.restoreGState()
+    }
+
+    private func drawFootprint(ctx: CGContext, size: CGFloat) {
+        ctx.setFillColor(NSColor(white: 0.4, alpha: 0.3).cgColor)
+        ctx.fillEllipse(in: CGRect(x: -size * 0.5, y: -size * 0.3, width: size, height: size * 0.6))
     }
 
     private func drawDust(ctx: CGContext, size: CGFloat) {

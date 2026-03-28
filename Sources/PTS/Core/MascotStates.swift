@@ -12,6 +12,18 @@ enum StateKey {
     static let dragged = "dragged"
     static let thrown = "thrown"
     static let seekingApple = "seekingApple"
+    static let wallClimb = "wallClimb"
+}
+
+// MARK: - Idle Micro-Animations
+
+enum MicroAnimation: CaseIterable {
+    case lookAround     // subtle body tilt side to side
+    case yawn           // eyes close, stretch up, then back
+    case stretch        // expand wide, arms raised
+    case hopInPlace     // small jump (uses existing jump system)
+    case tapFoot        // rapid leg alternation
+    case sitRelax       // partial sit, relax for a moment
 }
 
 // MARK: - Idle State
@@ -20,9 +32,19 @@ final class IdleState: MascotStateProtocol {
     weak var controller: AppController?
     var blinkTimer: CGFloat = 0
 
+    // Micro-animation system
+    var microTimer: CGFloat = 0
+    var nextMicroTime: CGFloat = CGFloat.random(in: 5...10)
+    var currentMicro: MicroAnimation? = nil
+    var microProgress: CGFloat = 0
+    var microDuration: CGFloat = 0
+
     func enter(mascot: MascotEntity) {
         mascot.jumpPhase = .none
         blinkTimer = 0
+        microTimer = 0
+        nextMicroTime = CGFloat.random(in: 4...8)
+        currentMicro = nil
     }
 
     func update(dt: CGFloat, mascot: MascotEntity) {
@@ -39,6 +61,7 @@ final class IdleState: MascotStateProtocol {
 
         if idleTime > mascot.sleepDelay && !mascot.isAsleep {
             // Transition to sleeping
+            currentMicro = nil
             let sleepSpeed: CGFloat = 1.5
             ctrl.claudeView.eyeClose += (1 - ctrl.claudeView.eyeClose) * min(1, sleepSpeed * dt)
             ctrl.claudeView.sitAmount += (1 - ctrl.claudeView.sitAmount) * min(1, sleepSpeed * dt)
@@ -49,6 +72,7 @@ final class IdleState: MascotStateProtocol {
             }
         } else if idleTime > mascot.drowsyDelay {
             // Drowsy — blink cycle
+            currentMicro = nil
             blinkTimer += dt
             let blinkCycle = blinkTimer.truncatingRemainder(dividingBy: 0.8)
             if blinkCycle < 0.12 {
@@ -65,22 +89,197 @@ final class IdleState: MascotStateProtocol {
             if mascot.effectiveExpression == .sleepy {
                 mascot.setExpression(.neutral)
             }
+
+            // Micro-animation system — only when alert (not drowsy)
+            updateMicroAnimation(dt: dt, mascot: mascot, ctrl: ctrl)
         }
 
         // Check if we should start walking (mouse target)
         if mascot.autoTargetX != nil {
+            mascot.isEdgeSitting = false
             ctrl.stateMachine.transition(to: StateKey.walking, mascot: mascot)
             return
         }
 
-        // Visual updates
-        ctrl.claudeView.legFrame = 0
-        ctrl.claudeView.currentLegs = legsIdle
-        ctrl.claudeView.armsRaised = false
+        // Edge sitting detection: on a window, near edge, idle for >2s
+        if ctrl.level == .window, let petWin = ctrl.petWindowFrame, currentMicro == nil {
+            let nearLeft = mascot.x <= petWin.minX + 10
+            let nearRight = mascot.x >= petWin.maxX - 10
+            if nearLeft || nearRight {
+                mascot.edgeSitTimer += dt
+                if mascot.edgeSitTimer > 2 && !mascot.isEdgeSitting {
+                    mascot.isEdgeSitting = true
+                    ctrl.claudeView.facingRight = nearLeft // face outward
+                    mascot.setExpression(.happy, duration: 0)
+                }
+            } else {
+                mascot.edgeSitTimer = 0
+                mascot.isEdgeSitting = false
+            }
+        } else {
+            mascot.edgeSitTimer = 0
+            mascot.isEdgeSitting = false
+        }
+
+        // Edge sitting animation
+        if mascot.isEdgeSitting {
+            mascot.legSwingPhase += dt * 0.8
+            let swing = sin(mascot.legSwingPhase * .pi * 2)
+            ctrl.claudeView.currentLegs = swing > 0 ? legsDangle : legsDangleSwing
+            ctrl.claudeView.sitAmount += (0.4 - ctrl.claudeView.sitAmount) * min(1, 4 * dt)
+            ctrl.claudeView.armsRaised = false
+            return
+        }
+
+        // Visual updates (only if no micro-animation is overriding)
+        if currentMicro == nil {
+            ctrl.claudeView.legFrame = 0
+            ctrl.claudeView.currentLegs = legsIdle
+            ctrl.claudeView.armsRaised = false
+        }
     }
 
     func exit(mascot: MascotEntity) {
         blinkTimer = 0
+        currentMicro = nil
+    }
+
+    // MARK: Micro-Animation Logic
+
+    private func updateMicroAnimation(dt: CGFloat, mascot: MascotEntity, ctrl: AppController) {
+        if let micro = currentMicro {
+            // Advance current animation
+            microProgress += dt / microDuration
+            if microProgress >= 1 {
+                finishMicroAnimation(ctrl: ctrl)
+                return
+            }
+            applyMicroAnimation(micro, progress: microProgress, ctrl: ctrl, mascot: mascot)
+        } else {
+            // Timer to next animation
+            microTimer += dt
+            if microTimer >= nextMicroTime {
+                startRandomMicroAnimation(mascot: mascot, ctrl: ctrl)
+            }
+        }
+    }
+
+    private func startRandomMicroAnimation(mascot: MascotEntity, ctrl: AppController) {
+        let mood = ctrl.moodSystem.overallMood
+        let weights = microWeights(for: mood)
+        let micro = weightedRandom(from: weights)
+
+        // hopInPlace uses the jump system — hand off directly
+        if micro == .hopInPlace {
+            ctrl.startInPlaceJump()
+            microTimer = 0
+            nextMicroTime = CGFloat.random(in: 5...12)
+            return
+        }
+
+        currentMicro = micro
+        microProgress = 0
+        microTimer = 0
+
+        switch micro {
+        case .lookAround:  microDuration = 1.4
+        case .yawn:        microDuration = 1.2
+        case .stretch:     microDuration = 1.0
+        case .tapFoot:     microDuration = 0.6
+        case .sitRelax:    microDuration = 3.0
+        default:           microDuration = 1.0
+        }
+    }
+
+    private func applyMicroAnimation(_ micro: MicroAnimation, progress t: CGFloat, ctrl: AppController, mascot: MascotEntity) {
+        switch micro {
+        case .lookAround:
+            // Subtle body tilt: left → center → right → center
+            let phase = sin(t * .pi * 2)
+            ctrl.claudeView.rotation = phase * 0.04
+
+        case .yawn:
+            // First half: eyes close + stretch up. Second half: recover.
+            if t < 0.5 {
+                let p = t / 0.5
+                ctrl.claudeView.eyeClose = p
+                ctrl.claudeView.scaleY = 1 + 0.08 * p
+                ctrl.claudeView.scaleX = 1 - 0.03 * p
+            } else {
+                let p = (t - 0.5) / 0.5
+                ctrl.claudeView.eyeClose = 1 - p
+                ctrl.claudeView.scaleY = 1.08 - 0.08 * p
+                ctrl.claudeView.scaleX = 0.97 + 0.03 * p
+            }
+            mascot.setExpression(.sleepy, duration: 0)
+
+        case .stretch:
+            // Expand wide with arms up, then back
+            let bell = sin(t * .pi)
+            ctrl.claudeView.scaleX = 1 + 0.12 * bell
+            ctrl.claudeView.scaleY = 1 - 0.04 * bell
+            ctrl.claudeView.armsRaised = t < 0.8
+            if t < 0.1 { mascot.setExpression(.happy, duration: 0) }
+
+        case .tapFoot:
+            // Rapid leg alternation 4 times
+            let cycle = Int(t * 8)
+            ctrl.claudeView.legFrame = cycle % 2
+            ctrl.claudeView.currentLegs = ctrl.claudeView.legFrame == 0 ? legsIdle : legsWalk
+
+        case .sitRelax:
+            // Gradually sit down, hold, then back up
+            if t < 0.2 {
+                ctrl.claudeView.sitAmount = (t / 0.2) * 0.5
+            } else if t < 0.8 {
+                ctrl.claudeView.sitAmount = 0.5
+                ctrl.claudeView.legYBob = -2 * SCALE * 0.5
+            } else {
+                ctrl.claudeView.sitAmount = 0.5 * (1 - (t - 0.8) / 0.2)
+            }
+            mascot.setExpression(.happy, duration: 0)
+
+        case .hopInPlace:
+            break // handled by jump system
+        }
+    }
+
+    private func finishMicroAnimation(ctrl: AppController) {
+        // Reset visual overrides
+        ctrl.claudeView.armsRaised = false
+        ctrl.claudeView.currentLegs = legsIdle
+        ctrl.claudeView.legFrame = 0
+        currentMicro = nil
+        nextMicroTime = CGFloat.random(in: 5...12)
+    }
+
+    // MARK: Mood-weighted random selection
+
+    private func microWeights(for mood: MoodSystem.Mood) -> [(MicroAnimation, Float)] {
+        switch mood {
+        case .tired, .exhausted:
+            return [(.yawn, 0.4), (.sitRelax, 0.3), (.lookAround, 0.2), (.stretch, 0.1)]
+        case .ecstatic:
+            return [(.hopInPlace, 0.35), (.tapFoot, 0.25), (.stretch, 0.2), (.lookAround, 0.2)]
+        case .curious:
+            return [(.lookAround, 0.4), (.tapFoot, 0.2), (.hopInPlace, 0.2), (.yawn, 0.1), (.stretch, 0.1)]
+        case .happy:
+            return [(.hopInPlace, 0.2), (.stretch, 0.2), (.lookAround, 0.2), (.tapFoot, 0.2), (.sitRelax, 0.2)]
+        case .sad, .hungry:
+            return [(.sitRelax, 0.4), (.yawn, 0.3), (.lookAround, 0.2), (.tapFoot, 0.1)]
+        default:
+            return [(.lookAround, 0.25), (.yawn, 0.15), (.stretch, 0.15), (.tapFoot, 0.15), (.hopInPlace, 0.15), (.sitRelax, 0.15)]
+        }
+    }
+
+    private func weightedRandom(from weights: [(MicroAnimation, Float)]) -> MicroAnimation {
+        let total = weights.reduce(Float(0)) { $0 + $1.1 }
+        var roll = Float.random(in: 0..<total)
+        for (anim, weight) in weights {
+            roll -= weight
+            if roll <= 0 { return anim }
+        }
+        return weights.last?.0 ?? .lookAround
     }
 }
 
@@ -267,16 +466,17 @@ final class DraggedState: MascotStateProtocol {
 
 final class ThrownState: MascotStateProtocol {
     weak var controller: AppController?
-    let gravity: CGFloat = -1800
-    let airResistanceX: CGFloat = 0.04  // Shimeji-style air resistance
-    let airResistanceY: CGFloat = 0.08
-    let bounceDamping: CGFloat = 0.5
+    let gravity: CGFloat = -2600       // heavier feel
+    let airResistanceX: CGFloat = 0.10 // more horizontal drag — stops drifting
+    let airResistanceY: CGFloat = 0.06
+    let bounceDamping: CGFloat = 0.38  // less bouncy
     let frictionX: CGFloat = 0.98
     var canBeInterrupted: Bool { false }
 
     func enter(mascot: MascotEntity) {
         mascot.isThrown = true
         mascot.isAsleep = false
+        controller?.petWindowFrame = nil  // pet is no longer on any window
         mascot.wakingUp = false
         controller?.claudeView.eyeClose = 0
         controller?.claudeView.sitAmount = 0
@@ -382,20 +582,28 @@ final class ThrownState: MascotStateProtocol {
             ctrl.particleSystem?.emitDust(at: CGPoint(x: mascot.x, y: mascot.y), count: 3)
         }
 
-        // Window top collision — land on active window
-        if let winFrame = ctrl.activeWindowFrame, mascot.velocityY < 0 {
-            let winFloor = ctrl.computeWindowFloorY(for: winFrame)
-            let onWindowX = mascot.x >= winFrame.minX && mascot.x <= winFrame.maxX
-            // Falling through the window top border
-            if onWindowX && mascot.y <= winFloor + 5 && mascot.y > winFloor - 20 {
+        // Window top collision — check all visible windows, not just the active one.
+        // This lets the mascot land on (or be placed on) any window when thrown/dropped.
+        if mascot.velocityY < 0 {
+            // Build candidate list: active window first, then all others
+            var candidates: [NSRect] = []
+            if let active = ctrl.activeWindowFrame { candidates.append(active) }
+            for f in ctrl.visibleWindowFrames where !candidates.contains(f) { candidates.append(f) }
+
+            for winFrame in candidates {
+                let winFloor = ctrl.computeWindowFloorY(for: winFrame)
+                let onWindowX = mascot.x >= winFrame.minX && mascot.x <= winFrame.maxX
+                guard onWindowX && mascot.y <= winFloor + 8 && mascot.y > winFloor - 24 else { continue }
+
                 mascot.y = winFloor
-                if abs(mascot.velocityY) < 120 && abs(mascot.velocityX) < 60 {
+                if abs(mascot.velocityY) < 160 && abs(mascot.velocityX) < 80 {
                     // Land on window
                     mascot.velocityY = 0
                     mascot.velocityX = 0
                     mascot.isThrown = false
                     mascot.level = .window
-                    ctrl.windowFloorY = winFloor
+                    ctrl.petWindowFrame = winFrame   // track the window pet is physically on
+                    ctrl.petWindowFloorY = winFloor  // WindowTracker keeps following frontmost separately
                     mascot.landingShakeTimer = 0.2
                     mascot.setExpression(.happy, duration: 1.5)
                     ctrl.stateMachine.forceTransition(to: StateKey.idle, mascot: mascot)
@@ -405,6 +613,7 @@ final class ThrownState: MascotStateProtocol {
                 // Bounce off window
                 mascot.velocityY = abs(mascot.velocityY) * bounceDamping * 0.6
                 ctrl.particleSystem?.emitDust(at: CGPoint(x: mascot.x, y: mascot.y), count: 2)
+                break
             }
         }
 
@@ -454,5 +663,129 @@ final class ThrownState: MascotStateProtocol {
         mascot.velocityX = 0
         mascot.velocityY = 0
         // Don't snap scale/rotation — let update loop smooth them back
+    }
+}
+
+// MARK: - Wall Climb State (climbing sides of windows, hanging)
+
+final class WallClimbState: MascotStateProtocol {
+    weak var controller: AppController?
+    var canBeInterrupted: Bool { true }
+
+    private var hangTimer: CGFloat = 0
+    private var hangDuration: CGFloat = 0
+    private var legTimer: CGFloat = 0
+    private var windowFrame: NSRect = .zero
+
+    func enter(mascot: MascotEntity) {
+        hangTimer = 0
+        hangDuration = CGFloat.random(in: 4...12)
+        legTimer = 0
+        mascot.level = .window
+
+        guard let ctrl = controller, let petWin = ctrl.petWindowFrame else { return }
+        windowFrame = petWin
+
+        // Rotate to cling to wall
+        let side = mascot.wallSide
+        ctrl.claudeView.rotation = side < 0 ? -CGFloat.pi / 2 : CGFloat.pi / 2
+        ctrl.claudeView.facingRight = true
+        ctrl.claudeView.armsRaised = true
+        ctrl.claudeView.currentLegs = legsWalk
+
+        // Snap X to window edge
+        mascot.x = side < 0 ? windowFrame.minX : windowFrame.maxX
+    }
+
+    func update(dt: CGFloat, mascot: MascotEntity) {
+        guard let ctrl = controller else { return }
+
+        let climbSpeed: CGFloat = 280
+
+        // Keep X snapped to wall side
+        mascot.x = mascot.wallSide < 0 ? windowFrame.minX : windowFrame.maxX
+
+        if mascot.wallClimbDir != 0 {
+            // Moving up or down
+            mascot.y += mascot.wallClimbDir * climbSpeed * dt
+
+            // Leg animation while climbing
+            legTimer += dt
+            if legTimer > 0.1 {
+                ctrl.claudeView.legFrame = ctrl.claudeView.legFrame == 0 ? 1 : 0
+                ctrl.claudeView.currentLegs = ctrl.claudeView.legFrame == 0 ? legsIdle : legsWalk
+                legTimer = 0
+            }
+
+            // Reached top of window → transition to standing on top
+            if mascot.wallClimbDir > 0 && mascot.y >= ctrl.computeWindowFloorY(for: windowFrame) {
+                mascot.y = ctrl.computeWindowFloorY(for: windowFrame)
+                mascot.wallSide = 0
+                mascot.wallClimbDir = 0
+                ctrl.claudeView.rotation = 0
+                ctrl.claudeView.armsRaised = false
+                ctrl.petWindowFrame = windowFrame
+                ctrl.petWindowFloorY = ctrl.computeWindowFloorY(for: windowFrame)
+                mascot.setExpression(.happy, duration: 1.0)
+                ctrl.stateMachine.forceTransition(to: StateKey.idle, mascot: mascot)
+                return
+            }
+
+            // Reached bottom → transition to ground
+            if mascot.wallClimbDir < 0 && mascot.y <= ctrl.groundFloorY {
+                mascot.y = ctrl.groundFloorY
+                mascot.level = .ground
+                mascot.wallSide = 0
+                mascot.wallClimbDir = 0
+                ctrl.claudeView.rotation = 0
+                ctrl.claudeView.armsRaised = false
+                ctrl.petWindowFrame = nil
+                ctrl.stateMachine.forceTransition(to: StateKey.idle, mascot: mascot)
+                return
+            }
+        } else {
+            // Hanging in place
+            hangTimer += dt
+            ctrl.claudeView.currentLegs = legsIdle
+            ctrl.claudeView.armsRaised = true
+
+            // Slow leg swing while hanging
+            legTimer += dt
+            if legTimer > 0.4 {
+                ctrl.claudeView.legFrame = ctrl.claudeView.legFrame == 0 ? 1 : 0
+                ctrl.claudeView.currentLegs = ctrl.claudeView.legFrame == 0 ? legsIdle : legsWalk
+                legTimer = 0
+            }
+
+            // After hang duration, decide next action
+            if hangTimer >= hangDuration {
+                let roll = Float.random(in: 0...1)
+                if roll < 0.4 {
+                    mascot.wallClimbDir = 1   // climb up
+                } else if roll < 0.7 {
+                    mascot.wallClimbDir = -1  // climb down
+                } else {
+                    // Fall off
+                    mascot.wallSide = 0
+                    mascot.wallClimbDir = 0
+                    mascot.velocityX = CGFloat(mascot.wallSide) * -80
+                    mascot.velocityY = 50
+                    mascot.setExpression(.surprised, duration: 1.0)
+                    ctrl.claudeView.rotation = 0
+                    ctrl.stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
+                    return
+                }
+                hangTimer = 0
+                hangDuration = CGFloat.random(in: 3...8)
+            }
+        }
+
+        ctrl.positionSprite()
+    }
+
+    func exit(mascot: MascotEntity) {
+        mascot.wallClimbDir = 0
+        controller?.claudeView.rotation = 0
+        controller?.claudeView.armsRaised = false
     }
 }

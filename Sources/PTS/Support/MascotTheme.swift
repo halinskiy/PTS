@@ -12,15 +12,15 @@ final class MascotTheme {
     }
 
     static let presets: [Preset] = [
-        Preset(name: "Blue (Default)", hueShift: 0),
-        Preset(name: "Purple", hueShift: -40),
-        Preset(name: "Pink", hueShift: -80),
-        Preset(name: "Red", hueShift: -120),
-        Preset(name: "Orange", hueShift: -155),
-        Preset(name: "Yellow", hueShift: -185),
-        Preset(name: "Green", hueShift: 120),
-        Preset(name: "Teal", hueShift: 60),
-        Preset(name: "Monochrome", hueShift: 1000), // special sentinel
+        Preset(name: "Blue (Default)", hueShift: 0),    // base: 214°
+        Preset(name: "Teal",           hueShift: -34),  // → 180°
+        Preset(name: "Green",          hueShift: -94),  // → 120°
+        Preset(name: "Yellow",         hueShift: -154), // → 60°
+        Preset(name: "Orange",         hueShift: 176),  // → 30°
+        Preset(name: "Red",            hueShift: 146),  // → 0°
+        Preset(name: "Pink",           hueShift: 106),  // → 320°
+        Preset(name: "Purple",         hueShift: 56),   // → 270°
+        Preset(name: "Monochrome",     hueShift: 1000), // special sentinel
     ]
 
     private(set) var hueShift: CGFloat = 0

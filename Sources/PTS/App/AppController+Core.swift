@@ -87,7 +87,26 @@ extension AppController {
         screenLeft = screenFrame.origin.x + halfBody + 10
         screenRight = screenFrame.origin.x + screenFrame.width - halfBody - 10
         groundFloorY = -feetOffset
-        dockFloorY = dock.height - feetOffset
+
+        let newDockFloorY = dock.height - feetOffset
+
+        // Detect dock auto-hide reveal: dock just appeared from below
+        // (prevDockFloorY is nil on first call — skip to avoid false trigger at launch)
+        if let prev = prevDockFloorY,
+           prev < 10, newDockFloorY >= 20,
+           window != nil, level == .ground,
+           crabX >= dockLeft - spriteW * 0.5, crabX <= dockRight + spriteW * 0.5,
+           !mascot.isDragged, !mascot.isThrown, jumpPhase == .none {
+            // Dock appeared under the mascot — kick it up
+            mascot.velocityX = CGFloat.random(in: -80...80)
+            mascot.velocityY = CGFloat.random(in: 320...440)
+            mascot.setExpression(.surprised, duration: 2.0)
+            if mascot.isAsleep { mascot.isAsleep = false; mascot.wakingUp = false }
+            stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
+        }
+
+        dockFloorY = newDockFloorY
+        prevDockFloorY = newDockFloorY
 
         let windowHeight = screenFrame.height
         window?.setFrame(
@@ -126,7 +145,7 @@ extension AppController {
         switch level {
         case .dock: return dockLeft
         case .ground: return screenLeft
-        case .window: return activeWindowFrame?.minX ?? screenLeft
+        case .window: return petWindowFrame?.minX ?? activeWindowFrame?.minX ?? screenLeft
         }
     }
 
@@ -134,7 +153,7 @@ extension AppController {
         switch level {
         case .dock: return dockRight
         case .ground: return screenRight
-        case .window: return activeWindowFrame?.maxX ?? screenRight
+        case .window: return petWindowFrame?.maxX ?? activeWindowFrame?.maxX ?? screenRight
         }
     }
 

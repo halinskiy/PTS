@@ -1,5 +1,48 @@
 import Foundation
 
+// MARK: - Time-of-Day Awareness
+
+enum TimeOfDay {
+    case morning, afternoon, evening, night
+
+    static var current: TimeOfDay {
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 6..<12:  return .morning
+        case 12..<18: return .afternoon
+        case 18..<22: return .evening
+        default:      return .night
+        }
+    }
+
+    var energyMultiplier: Float {
+        switch self {
+        case .morning: return 1.2
+        case .afternoon: return 1.0
+        case .evening: return 0.85
+        case .night: return 0.6
+        }
+    }
+
+    var walkSpeedMultiplier: Float {
+        switch self {
+        case .morning: return 1.1
+        case .afternoon: return 1.0
+        case .evening: return 0.9
+        case .night: return 0.7
+        }
+    }
+
+    var sleepinessBias: Float {
+        switch self {
+        case .morning: return 0
+        case .afternoon: return 0
+        case .evening: return 0.1
+        case .night: return 0.3
+        }
+    }
+}
+
 // MARK: - Tamagotchi-style Mood System
 
 final class MoodSystem {
@@ -80,8 +123,10 @@ final class MoodSystem {
     // MARK: - Update
 
     func update(dt: Float, context: SystemContext) {
-        // Energy decays slowly over time
-        energy = max(0, energy - dt * 0.0008)
+        // Energy decays slowly over time (faster at night)
+        let timeFactor = TimeOfDay.current.energyMultiplier
+        energy = max(0, energy - dt * 0.0008 / timeFactor)
+        energy = max(0, energy - dt * TimeOfDay.current.sleepinessBias * 0.001)
 
         // Interactions restore energy
         energy = min(1, energy + context.recentInteractions * 0.05)

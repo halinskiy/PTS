@@ -11,9 +11,9 @@ enum AppConstants {
 
 // Active colors — read from theme (hue-shifted)
 var bodyColor: NSColor { MascotTheme.shared.bodyColor }
-var screenColor: NSColor { MascotTheme.shared.screenColor }
+var screenColor: NSColor { MascotTheme.shared.bodyColor }   // same as body → uniform tint
 var shadowColor: NSColor { MascotTheme.shared.shadowColor }
-let eyeColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1)
+var eyeColor: NSColor { .black }                             // pure black — crisp contrast on any body color
 
 let SHADOW_FLOOR_MARGIN: CGFloat = 24
 let SHADOW_VIEW_HEIGHT: CGFloat = 6 * SCALE + SHADOW_FLOOR_MARGIN
@@ -28,6 +28,19 @@ let bodyGrid: [[Int]] = [
     [1, 1, 2, 2, 2, 2, 2, 2, 1, 1], // Screen
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], // Bottom Body
     [0, 1, 1, 1, 1, 1, 1, 1, 1, 0], // Bottom Edge
+]
+
+// Edge sitting: legs extend 3 rows (dangling over window edge)
+let legsDangle: [[Int]] = [
+    [0, 1, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 1, 0],
+]
+
+let legsDangleSwing: [[Int]] = [
+    [0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
 ]
 
 let legsIdle: [[Int]] = [

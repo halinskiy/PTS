@@ -566,6 +566,16 @@ extension AppController {
         apples[index].velocityY = CGFloat.random(in: 1250...1550)
         apples[index].rotationSpeed = CGFloat.random(in: 12...18) * (direction > 0 ? 1 : -1)
         apples[index].floorY = appleFloorY(forX: apples[index].x, currentY: apples[index].y)
+
+        // Reset seek delay — the apple position will change while it's airborne/bouncing.
+        // Mascot waits for it to settle before chasing.
+        if isSeekingApples {
+            appleSeekStartTime = CACurrentMediaTime()
+            appleSeekDelay = TimeInterval.random(in: 1.5...2.5)
+            appleSeekTargetID = nil
+            appleSeekHopTriggers.removeAll()
+            autoTargetX = nil
+        }
     }
 
     func handleAppleClick(at screenPoint: CGPoint) -> Bool {

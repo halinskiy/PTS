@@ -36,11 +36,23 @@ final class SystemMonitor {
     var isCPULow: Bool { cpuUsage < 0.1 }
     var isIdle: Bool { typingSpeed < 0.5 && cpuUsage < 0.15 }
 
+    // Claude Code process detection
+    private var isClaudeActive = false
+    private var claudeCheckTimer: Timer?
+    var isClaudeRunning: Bool { isClaudeActive }
+
+    // Battery & dark mode
+    private(set) var isLowPowerMode = false
+    private var batteryCheckTimer: Timer?
+    private var darkModeObserver: NSObjectProtocol?
+
     // Callbacks
     var onTypingSpeedChanged: ((Float) -> Void)?
     var onCPUChanged: ((Float) -> Void)?
     var onScreenshot: (() -> Void)?
-    var onAppSwitch: ((String) -> Void)?
+    var onAppSwitch: ((String, String?) -> Void)?  // (appName, bundleIdentifier)
+    var onLowPowerModeChanged: ((Bool) -> Void)?
+    var onDarkModeChanged: (() -> Void)?
 
     // MARK: - Start/Stop
 
@@ -49,6 +61,9 @@ final class SystemMonitor {
         startCPUMonitoring()
         startNotificationMonitoring()
         startAppSwitchMonitoring()
+        startClaudeMonitoring()
+        startBatteryMonitoring()
+        startDarkModeMonitoring()
     }
 
     func stopMonitoring() {
@@ -58,6 +73,14 @@ final class SystemMonitor {
         }
         cpuTimer?.invalidate()
         cpuTimer = nil
+        claudeCheckTimer?.invalidate()
+        claudeCheckTimer = nil
+        batteryCheckTimer?.invalidate()
+        batteryCheckTimer = nil
+        if let obs = darkModeObserver {
+            DistributedNotificationCenter.default().removeObserver(obs)
+            darkModeObserver = nil
+        }
         notificationResetTimer?.invalidate()
         screenshotResetTimer?.invalidate()
 
@@ -157,7 +180,83 @@ final class SystemMonitor {
             queue: .main
         ) { [weak self] notification in
             if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-                self?.onAppSwitch?(app.localizedName ?? "Unknown")
+                self?.onAppSwitch?(app.localizedName ?? "Unknown", app.bundleIdentifier)
+            }
+        }
+    }
+
+    // MARK: - Battery Monitoring
+
+    private func startBatteryMonitoring() {
+        isLowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        batteryCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let current = ProcessInfo.processInfo.isLowPowerModeEnabled
+            if current != self.isLowPowerMode {
+                self.isLowPowerMode = current
+                self.onLowPowerModeChanged?(current)
+            }
+        }
+    }
+
+    // MARK: - Dark Mode Monitoring
+
+    private func startDarkModeMonitoring() {
+        darkModeObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onDarkModeChanged?()
+        }
+    }
+
+    // MARK: - Claude Code Detection
+
+    private func startClaudeMonitoring() {
+        checkClaudeProcess()
+        claudeCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.checkClaudeProcess()
+        }
+    }
+
+    enum ClaudeActivity { case idle, thinking, coding }
+    private(set) var claudeActivity: ClaudeActivity = .idle
+    private var lastClaudeCheckModDate: Date?
+
+    private func checkClaudeProcess() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            task.arguments = ["-x", "claude"]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+            let running = task.terminationStatus == 0
+
+            // Check ~/.claude/ directory for recent activity
+            var activity: ClaudeActivity = .idle
+            if running {
+                let claudeDir = NSHomeDirectory() + "/.claude"
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: claudeDir),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    let age = Date().timeIntervalSince(modDate)
+                    if age < 3 {
+                        activity = .coding   // very recent = actively generating
+                    } else if age < 15 {
+                        activity = .thinking // somewhat recent = thinking
+                    } else {
+                        activity = .thinking // running but idle
+                    }
+                } else {
+                    activity = .thinking
+                }
+            }
+
+            DispatchQueue.main.async {
+                self?.isClaudeActive = running
+                self?.claudeActivity = activity
             }
         }
     }

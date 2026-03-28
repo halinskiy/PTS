@@ -1,6 +1,8 @@
 import Cocoa
 import Carbon.HIToolbox
 
+enum AutonomousPhase { case walking, sleeping }
+
 final class AppController: NSObject, NSApplicationDelegate {
     let debugEnabled: Bool
     var window: NSWindow!
@@ -18,6 +20,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     let windowTracker = WindowTracker()
     let systemMonitor = SystemMonitor()
     let moodSystem = MoodSystem()
+    let progressionSystem = ProgressionSystem()
     var particleSystem: ParticleSystem!
     var inputHandler: InputHandler!
     weak var interactiveView: InteractiveContentView?
@@ -83,8 +86,10 @@ final class AppController: NSObject, NSApplicationDelegate {
     var groundFloorY: CGFloat = 0
     var screenLeft: CGFloat = 0
     var screenRight: CGFloat = 0
-    var activeWindowFrame: NSRect? = nil
-    var windowFloorY: CGFloat = 0
+    var activeWindowFrame: NSRect? = nil  // frontmost window (WindowTracker — for climbing decisions)
+    var windowFloorY: CGFloat = 0         // floor of frontmost window (jump target)
+    var petWindowFrame: NSRect? = nil     // window pet is physically sitting on
+    var petWindowFloorY: CGFloat = 0      // floor Y of petWindowFrame (for stickiness)
 
     var level: CrabLevel {
         get { mascot.level }
@@ -133,7 +138,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         get { mascot.autoTargetX }
         set { mascot.autoTargetX = newValue }
     }
-    let autoThresh: CGFloat = 15
+    let autoThresh: CGFloat = 5
     let settleDelay: TimeInterval = 0.52
     var lastMouseMoveTime: TimeInterval {
         get { mascot.lastMouseMoveTime }
@@ -172,14 +177,27 @@ final class AppController: NSObject, NSApplicationDelegate {
     var spriteH: CGFloat { mascot.spriteH }
     var lastDockCheck: TimeInterval = 0
     var lastWindowCheck: TimeInterval = 0
+    var lastVisibleWindowsCheck: TimeInterval = 0
+    var prevDockFloorY: CGFloat? = nil
+    var visibleWindowFrames: [NSRect] = []
     let dockCheckInterval: TimeInterval = 2.0
     let windowCheckInterval: TimeInterval = 0.5 // Faster with AXObserver fallback
     var dockVisible = true
+
+    // MARK: - Autonomous roaming
+    var isAutonomousMode = false
+    var autonomousPhase: AutonomousPhase = .walking
+    var autonomousPhaseStartTime: TimeInterval = 0
+    var lastUserActivityTime: TimeInterval = 0
+    var autonomousNextTargetTime: TimeInterval = 0
 
     var statusItem: NSStatusItem!
     var accessibilityMenuItem: NSMenuItem?
     var feedMenuItem: NSMenuItem?
     var aboutMenuItem: NSMenuItem?
+    var checkForUpdatesMenuItem: NSMenuItem?
+    var petNameMenuItem: NSMenuItem?
+    var autoWalkDelayMenuItem: NSMenuItem?
     var globalMouseMonitor: Any?
     var localMouseMonitor: Any?
     var accessibilityFeaturesActive = false
@@ -188,6 +206,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     var hotKeyHandlerRef: EventHandlerRef?
     var lastDebugSnapshot = ""
     var lastDebugSnapshotTime: TimeInterval = 0
+    var lastAppSwitchBundleID: String?
+    var displayLink: AnyObject?
 
     var apples: [AppleState] = []
     let appleGravity: CGFloat = -1200
@@ -204,6 +224,17 @@ final class AppController: NSObject, NSApplicationDelegate {
     var applesEatenThisFrame = 0
     var recentInteractionCount: Float = 0
     var lastReactionTime: TimeInterval = 0
+
+    // MARK: - Cursor tracking
+    var prevCursorX: CGFloat = 0
+    var prevCursorY: CGFloat = 0
+    var cursorSpeed: CGFloat = 0
+    var cursorIdleNearPetTimer: CGFloat = 0
+
+    // MARK: - App body language
+    enum AppBehavior { case none, watching, coding, vibing }
+    var activeAppBehavior: AppBehavior = .none
+    var appBehaviorTimer: CGFloat = 0
 
     // MARK: - Window inertia
     var windowInertiaVelocity: CGVector = .zero
@@ -232,12 +263,16 @@ final class AppController: NSObject, NSApplicationDelegate {
         let thrown = ThrownState()
         thrown.controller = self
 
+        let wallClimb = WallClimbState()
+        wallClimb.controller = self
+
         stateMachine.register(idle, for: StateKey.idle)
         stateMachine.register(walking, for: StateKey.walking)
         stateMachine.register(sleeping, for: StateKey.sleeping)
         stateMachine.register(wakingUp, for: StateKey.wakingUp)
         stateMachine.register(dragged, for: StateKey.dragged)
         stateMachine.register(thrown, for: StateKey.thrown)
+        stateMachine.register(wallClimb, for: StateKey.wallClimb)
     }
 
     // MARK: - System Monitor Callbacks
@@ -272,13 +307,116 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
         }
 
+        // MARK: Battery reaction
+        systemMonitor.onLowPowerModeChanged = { [weak self] isLowPower in
+            guard let self = self, !self.mascot.isAsleep else { return }
+            if isLowPower {
+                self.mascot.setExpression(.sad, duration: 2.0)
+                self.particleSystem?.emitSweat(at: CGPoint(x: self.mascot.x, y: self.mascot.y + self.mascot.spriteH * 0.7))
+            } else {
+                self.mascot.setExpression(.happy, duration: 2.0)
+                self.particleSystem?.emitStar(at: CGPoint(x: self.mascot.x, y: self.mascot.y + self.mascot.spriteH))
+            }
+        }
+
+        // MARK: Dark mode reaction
+        systemMonitor.onDarkModeChanged = { [weak self] in
+            guard let self = self, !self.mascot.isAsleep else { return }
+            self.mascot.setExpression(.surprised, duration: 1.5)
+        }
+
+        // MARK: App-specific reactions
+        systemMonitor.onAppSwitch = { [weak self] appName, bundleID in
+            guard let self = self else { return }
+            guard !self.mascot.isAsleep && !self.mascot.isDragged && !self.mascot.isThrown else { return }
+            let now = CACurrentMediaTime()
+            guard now - self.lastReactionTime > 3 else { return }
+            guard let bundleID = bundleID, bundleID != self.lastAppSwitchBundleID else { return }
+            self.lastAppSwitchBundleID = bundleID
+
+            // Claude Code in terminal override
+            let terminalIDs: Set<String> = ["com.apple.Terminal", "com.googlecode.iterm2",
+                                            "dev.warp.Warp-Stable", "co.zeit.hyper"]
+            if terminalIDs.contains(bundleID) && self.systemMonitor.isClaudeRunning {
+                self.lastReactionTime = now
+                self.mascot.setExpression(.thinking, duration: 3.0)
+                self.particleSystem?.emitStar(at: CGPoint(x: self.mascot.x, y: self.mascot.y + self.mascot.spriteH * 0.8))
+                return
+            }
+
+            // App reaction table: bundleID → (expression, duration, particle)
+            let reactions: [(Set<String>, FaceExpression, CGFloat, Bool)] = [
+                // Dev tools → excited
+                (["com.apple.dt.Xcode", "com.microsoft.VSCode",
+                  "com.todesktop.230313mzl4w4u92", "com.cursor.Cursor"], .excited, 2.0, true),
+                // Browsers → thinking
+                (["com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox",
+                  "company.thebrowser.Browser"], .thinking, 1.5, false),
+                // Communication → happy + heart
+                (["com.tinyspeck.slackmacgap", "com.hnc.Discord", "ru.keepcoder.Telegram",
+                  "com.facebook.archon.developerID"], .happy, 2.0, true),
+                // Terminal → thinking
+                (terminalIDs, .thinking, 2.0, false),
+                // Music → happy
+                (["com.apple.Music", "com.spotify.client"], .happy, 2.5, false),
+            ]
+
+            // App body language mapping
+            let browserIDs: Set<String> = ["com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox",
+                                           "company.thebrowser.Browser"]
+            let editorIDs: Set<String> = ["com.apple.dt.Xcode", "com.microsoft.VSCode",
+                                          "com.todesktop.230313mzl4w4u92", "com.cursor.Cursor"]
+            let musicIDs: Set<String> = ["com.apple.Music", "com.spotify.client"]
+
+            if editorIDs.contains(bundleID) {
+                self.activeAppBehavior = .coding
+            } else if browserIDs.contains(bundleID) {
+                self.activeAppBehavior = .watching
+            } else if musicIDs.contains(bundleID) {
+                self.activeAppBehavior = .vibing
+            } else {
+                self.activeAppBehavior = .none
+            }
+            self.appBehaviorTimer = 0
+
+            for (ids, expression, duration, hasParticle) in reactions {
+                if ids.contains(bundleID) {
+                    self.lastReactionTime = now
+                    self.mascot.setExpression(expression, duration: duration)
+                    if hasParticle {
+                        let pt = CGPoint(x: self.mascot.x, y: self.mascot.y + self.mascot.spriteH * 0.8)
+                        if expression == .happy {
+                            self.particleSystem?.emitHeart(at: pt)
+                        } else {
+                            self.particleSystem?.emitStar(at: pt)
+                        }
+                    }
+                    break
+                }
+            }
+        }
+
         windowTracker.onWindowMoved = { [weak self] frame, delta in
             guard let self = self else { return }
+            // activeWindowFrame always tracks the frontmost window (for climbing decisions)
             self.activeWindowFrame = frame
             self.windowFloorY = self.computeWindowFloorY(for: frame)
 
             guard self.level == .window else { return }
             guard !self.mascot.isDragged && !self.mascot.isThrown else { return }
+
+            // Only ride if the moved window is the same one the pet is physically on.
+            // Compare the window's position BEFORE the move to petWindowFrame's origin.
+            if let petWin = self.petWindowFrame {
+                let prevX = frame.origin.x - delta.dx
+                let prevY = frame.origin.y - delta.dy
+                guard abs(prevX - petWin.origin.x) < 60 && abs(prevY - petWin.origin.y) < 60 else {
+                    return  // Different window moved — skip riding to prevent teleportation
+                }
+                // Update pet's window to new position
+                self.petWindowFrame = frame
+                self.petWindowFloorY = self.computeWindowFloorY(for: frame)
+            }
 
             let displacement = sqrt(delta.dx * delta.dx + delta.dy * delta.dy)
 
@@ -288,7 +426,6 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.mascot.velocityY = 200
                 self.mascot.setExpression(.scared)
                 self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
-                // Wake up if sleeping
                 if self.mascot.isAsleep {
                     self.mascot.isAsleep = false
                     self.mascot.wakingUp = false
@@ -311,7 +448,6 @@ final class AppController: NSObject, NSApplicationDelegate {
 
             // If window moves down fast, mascot bounces off temporarily
             if delta.dy < -25 && !self.mascot.isAsleep {
-                // Actual mini-throw: pet hops up off the window surface
                 let bounceStrength = min(400, -delta.dy * 3)
                 self.mascot.velocityX = 0
                 self.mascot.velocityY = bounceStrength
@@ -330,8 +466,8 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
 
             // Keep mascot within window bounds
-            if let wf = self.activeWindowFrame {
-                self.mascot.x = max(wf.minX + 10, min(wf.maxX - 10, self.mascot.x))
+            if let petWin = self.petWindowFrame {
+                self.mascot.x = max(petWin.minX + 10, min(petWin.maxX - 10, self.mascot.x))
             }
         }
 
@@ -339,32 +475,42 @@ final class AppController: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             let wasOnWindow = self.level == .window
             let hadWindow = self.activeWindowFrame != nil
+            let oldActiveFrame = self.activeWindowFrame
             self.activeWindowFrame = frame
 
             if let frame = frame {
                 self.windowFloorY = self.computeWindowFloorY(for: frame)
             }
 
-            // Pet was standing on a window that changed (alt-tab, close, minimize)
+            // Only throw the pet if it was on the frontmost (WindowTracker-tracked) window.
+            // If the pet is on a different (non-frontmost) window, it stays put.
             if wasOnWindow && !self.mascot.isDragged && !self.mascot.isThrown {
-                if frame == nil {
-                    // Window disappeared — fall surprised, then seek new active window
-                    self.mascot.velocityX = 0
-                    self.mascot.velocityY = 0
-                    self.mascot.setExpression(.scared)
-                    self.mascot.seekActiveWindow = true
-                    self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
-                } else if hadWindow {
-                    // Window changed to a different one (alt-tab) — fall off and seek it
-                    self.mascot.velocityX = 0
-                    self.mascot.velocityY = 50  // small upward pop
-                    self.mascot.setExpression(.surprised)
-                    self.mascot.seekActiveWindow = true
-                    self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
+                let petIsOnFrontmost: Bool
+                if let petWin = self.petWindowFrame, let oldActive = oldActiveFrame {
+                    petIsOnFrontmost = abs(petWin.midX - oldActive.midX) < 60
+                        && abs(petWin.midY - oldActive.midY) < 60
+                } else {
+                    petIsOnFrontmost = true
                 }
-                if self.mascot.isAsleep {
-                    self.mascot.isAsleep = false
-                    self.mascot.wakingUp = false
+
+                if petIsOnFrontmost {
+                    if frame == nil {
+                        self.mascot.velocityX = 0
+                        self.mascot.velocityY = 0
+                        self.mascot.setExpression(.scared)
+                        self.mascot.seekActiveWindow = true
+                        self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
+                    } else if hadWindow {
+                        self.mascot.velocityX = 0
+                        self.mascot.velocityY = 50
+                        self.mascot.setExpression(.surprised)
+                        self.mascot.seekActiveWindow = true
+                        self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
+                    }
+                    if self.mascot.isAsleep {
+                        self.mascot.isAsleep = false
+                        self.mascot.wakingUp = false
+                    }
                 }
             }
         }
@@ -377,21 +523,23 @@ final class AppController: NSObject, NSApplicationDelegate {
             guard self.level == .window else { return }
             guard !self.mascot.isDragged && !self.mascot.isThrown else { return }
 
-            // Keep mascot within resized window bounds
+            // Only apply to pet if it's sitting on this window
+            if let petWin = self.petWindowFrame {
+                guard abs(frame.midX - petWin.midX) < 100 && abs(frame.midY - petWin.midY) < 200 else { return }
+                self.petWindowFrame = frame
+                self.petWindowFloorY = self.computeWindowFloorY(for: frame)
+            }
+
             let clampedX = max(frame.minX + 10, min(frame.maxX - 10, self.mascot.x))
             if clampedX != self.mascot.x {
                 self.mascot.x = clampedX
             }
+            self.mascot.y = self.petWindowFloorY
 
-            // Update Y to new window floor (window height may have changed)
-            self.mascot.y = self.windowFloorY
-
-            // React to resize — surprised wobble
             if !self.mascot.isAsleep {
                 self.mascot.setExpression(.surprised, duration: 0.8)
                 self.mascot.landingShakeTimer = 0.15
             } else {
-                // Wake up if resized significantly
                 self.mascot.isAsleep = false
                 self.mascot.wakingUp = true
                 self.mascot.lastActivityTime = CACurrentMediaTime()

@@ -86,10 +86,35 @@ else
 fi
 
 echo ""
-echo "Done! Created $APP_DIR"
-echo ""
-echo "To install:"
-echo "  cp -R $APP_DIR /Applications/"
-echo ""
-echo "To run:"
-echo "  open $APP_DIR"
+echo "Installing to /Applications/..."
+pkill -x "$APP_NAME" 2>/dev/null || true
+sleep 0.4
+rm -rf "/Applications/$APP_DIR"
+cp -R "$APP_DIR" "/Applications/$APP_DIR"
+
+# Strip quarantine before signing
+xattr -cr "/Applications/$APP_DIR" 2>/dev/null || true
+
+# ─── Local code signing ───────────────────────────────────────────────────────
+# Signs with a stable local cert so macOS TCC tracks by bundle ID + cert,
+# not by binary hash — Accessibility permission survives rebuilds.
+# Uses first available valid code-signing identity in the keychain.
+set +e
+SIGN_ID=$(security find-identity -p codesigning -v 2>/dev/null | grep -o '"[^"]*"' | head -1 | tr -d '"')
+if [ -n "$SIGN_ID" ]; then
+    if codesign --force --deep --sign "$SIGN_ID" "/Applications/$APP_DIR" 2>/dev/null; then
+        echo "Signed with \"$SIGN_ID\"."
+    else
+        echo "Warning: signing failed — accessibility may need re-granting after each build."
+    fi
+else
+    echo "Warning: no code-signing cert found."
+    echo "  → To fix: open Keychain Access → Certificate Assistant → Create a Certificate"
+    echo "    (name: anything, type: Code Signing). Then rebuild."
+fi
+set -e
+# ─────────────────────────────────────────────────────────────────────────────
+
+echo "Launching from /Applications/..."
+open "/Applications/$APP_DIR"
+echo "Done."

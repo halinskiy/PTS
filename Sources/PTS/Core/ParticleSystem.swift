@@ -27,6 +27,7 @@ final class ParticleSystem {
         case spark      // Sparks when running fast
         case star       // Stars when excited
         case sweat      // Sweat drop when CPU high
+        case footprint  // Tiny dot that fades — walking trail
     }
 
     init(containerView: NSView) {
@@ -110,6 +111,17 @@ final class ParticleSystem {
         particles.append(particle)
     }
 
+    func emitFootprint(at point: CGPoint) {
+        let particle = createParticle(
+            type: .footprint,
+            at: point,
+            velocity: CGVector(dx: 0, dy: 0),
+            life: 3.0,
+            size: SCALE * 0.5
+        )
+        particles.append(particle)
+    }
+
     // MARK: - Update
 
     func update(dt: CGFloat) {
@@ -158,6 +170,11 @@ final class ParticleSystem {
                 particles[i].velocityY -= 200 * dt // gravity pulls down
                 let lifeRatio = particles[i].life / particles[i].maxLife
                 particles[i].scale = lifeRatio
+
+            case .footprint:
+                // Static dot, just fades out
+                let lifeRatio = particles[i].life / particles[i].maxLife
+                particles[i].view.alphaValue = lifeRatio * 0.4
             }
 
             // Update view

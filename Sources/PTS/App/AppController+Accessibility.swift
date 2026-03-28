@@ -1,5 +1,6 @@
 import Cocoa
 import ApplicationServices
+import QuartzCore
 
 extension AppController {
     func makeAccessibilityWarningIcon() -> NSImage {
@@ -41,6 +42,15 @@ extension AppController {
 
         let menu = NSMenu()
 
+        // Pet name — shows name when set, "Name your pet…" otherwise
+        let nameItem = NSMenuItem(
+            title: petName.isEmpty ? "Name your pet…" : petName,
+            action: #selector(namePetAction),
+            keyEquivalent: ""
+        )
+        menu.addItem(nameItem)
+        menu.addItem(NSMenuItem.separator())
+
         // Accessibility warning (hidden when granted)
         let accessibilityItem = NSMenuItem(
             title: "Enable Accessibility Access",
@@ -76,7 +86,40 @@ extension AppController {
         }
         tintItem.submenu = tintMenu
         menu.addItem(tintItem)
+
+        // Auto-walk delay submenu
+        let autoWalkItem = NSMenuItem(title: "Auto-walk after…", action: nil, keyEquivalent: "")
+        let autoWalkMenu = NSMenu()
+        let delays: [(String, Int)] = [
+            ("1 minute",   60),
+            ("2 minutes",  120),
+            ("5 minutes",  300),
+            ("10 minutes", 600),
+            ("30 minutes", 1800),
+            ("1 hour",     3600),
+        ]
+        for (title, seconds) in delays {
+            let item = NSMenuItem(title: title, action: #selector(setAutoWalkDelay(_:)), keyEquivalent: "")
+            item.tag = seconds
+            item.target = self
+            autoWalkMenu.addItem(item)
+        }
+        autoWalkMenu.addItem(NSMenuItem.separator())
+        let neverItem = NSMenuItem(title: "Never", action: #selector(setAutoWalkDelay(_:)), keyEquivalent: "")
+        neverItem.tag = -1
+        neverItem.target = self
+        autoWalkMenu.addItem(neverItem)
+        autoWalkItem.submenu = autoWalkMenu
+        menu.addItem(autoWalkItem)
         menu.addItem(NSMenuItem.separator())
+
+        // Check for Updates
+        let updatesItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates),
+            keyEquivalent: ""
+        )
+        menu.addItem(updatesItem)
 
         // About
         let aboutItem = NSMenuItem(
@@ -94,7 +137,13 @@ extension AppController {
         accessibilityMenuItem = accessibilityItem
         feedMenuItem = feedItem
         aboutMenuItem = aboutItem
+        checkForUpdatesMenuItem = updatesItem
+        petNameMenuItem = nameItem
+        autoWalkDelayMenuItem = autoWalkItem
+        updateAutoWalkMenuCheckmarks()
     }
+
+    // MARK: - Status bar icon
 
     func updateStatusBarIcon() {
         guard let button = statusItem?.button else { return }
@@ -110,6 +159,13 @@ extension AppController {
         button.image = nil
         button.title = "🦀"
         button.imagePosition = .noImage
+    }
+
+    func moodOverall() -> Double {
+        let e = Double(moodSystem.energy)
+        let h = Double(moodSystem.happiness)
+        let notHungry = 1.0 - Double(moodSystem.hunger)
+        return (e + h + notHungry) / 3.0
     }
 
     func makeStatusBarIcon(named name: String) -> NSImage? {
@@ -154,12 +210,18 @@ extension AppController {
         AXIsProcessTrusted()
     }
 
+    private static let accessibilityPrePromptKey = "PTS.accessibilityPrePromptSeen"
+
     func presentAccessibilityPrePromptIfNeeded() {
         guard !isAccessibilityGranted else { return }
         guard !accessibilityPrePromptShownThisLaunch else { return }
         guard !accessibilityPromptRequestedThisLaunch else { return }
+        // Only ever show this alert once — after that the ⚠️ menu bar icon is enough
+        guard !UserDefaults.standard.bool(forKey: Self.accessibilityPrePromptKey) else { return }
 
         accessibilityPrePromptShownThisLaunch = true
+        UserDefaults.standard.set(true, forKey: Self.accessibilityPrePromptKey)
+
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -331,6 +393,7 @@ extension AppController {
 
         lastTime = CACurrentMediaTime()
         lastActivityTime = lastTime
+        lastUserActivityTime = lastTime
 
         setupStatusItemIfNeeded()
         updateAccessibilityMenuState()
@@ -341,11 +404,26 @@ extension AppController {
         // Start state machine in idle
         stateMachine.transition(to: StateKey.idle, mascot: mascot)
 
-        updateTimer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.update()
+        startDisplayLoop()
+    }
+
+    private func startDisplayLoop() {
+        if #available(macOS 14.0, *), let view = window?.contentView {
+            let link = view.displayLink(target: self, selector: #selector(displayLinkFired(_:)))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        } else {
+            updateTimer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+                self?.update()
+            }
+            if let updateTimer {
+                RunLoop.main.add(updateTimer, forMode: .common)
+            }
         }
-        if let updateTimer {
-            RunLoop.main.add(updateTimer, forMode: .common)
-        }
+    }
+
+    @available(macOS 14.0, *)
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        update()
     }
 }
