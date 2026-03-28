@@ -53,51 +53,10 @@ final class IdleState: MascotStateProtocol {
         let now = CACurrentMediaTime()
         let idleTime = now - mascot.lastActivityTime
 
-        // Check transitions
-        if mascot.isSeekingApples {
-            ctrl.stateMachine.transition(to: StateKey.seekingApple, mascot: mascot)
-            return
-        }
-
-        if idleTime > mascot.sleepDelay && !mascot.isAsleep {
-            // Transition to sleeping
+        // Don't run micro-animations when drowsy or sleeping (updateVisuals handles that)
+        guard idleTime < mascot.drowsyDelay && !mascot.isAsleep else {
             currentMicro = nil
-            let sleepSpeed: CGFloat = 1.5
-            ctrl.claudeView.eyeClose += (1 - ctrl.claudeView.eyeClose) * min(1, sleepSpeed * dt)
-            ctrl.claudeView.sitAmount += (1 - ctrl.claudeView.sitAmount) * min(1, sleepSpeed * dt)
-            if ctrl.claudeView.eyeClose > 0.95 && ctrl.claudeView.sitAmount > 0.95 {
-                mascot.isAsleep = true
-                ctrl.stateMachine.transition(to: StateKey.sleeping, mascot: mascot)
-                return
-            }
-        } else if idleTime > mascot.drowsyDelay {
-            // Drowsy — blink cycle
-            currentMicro = nil
-            blinkTimer += dt
-            let blinkCycle = blinkTimer.truncatingRemainder(dividingBy: 0.8)
-            if blinkCycle < 0.12 {
-                ctrl.claudeView.eyeClose = min(max(ctrl.claudeView.eyeClose, 0.85), 1)
-            } else {
-                ctrl.claudeView.eyeClose = max(ctrl.claudeView.eyeClose - dt * 8, 0)
-            }
-            ctrl.claudeView.sitAmount = max(ctrl.claudeView.sitAmount - dt * 6, 0)
-            mascot.setExpression(.sleepy)
-        } else {
-            blinkTimer = 0
-            ctrl.claudeView.eyeClose = max(ctrl.claudeView.eyeClose - dt * 6, 0)
-            ctrl.claudeView.sitAmount = max(ctrl.claudeView.sitAmount - dt * 6, 0)
-            if mascot.effectiveExpression == .sleepy {
-                mascot.setExpression(.neutral)
-            }
-
-            // Micro-animation system — only when alert (not drowsy)
-            updateMicroAnimation(dt: dt, mascot: mascot, ctrl: ctrl)
-        }
-
-        // Check if we should start walking (mouse target)
-        if mascot.autoTargetX != nil {
             mascot.isEdgeSitting = false
-            ctrl.stateMachine.transition(to: StateKey.walking, mascot: mascot)
             return
         }
 
@@ -109,7 +68,7 @@ final class IdleState: MascotStateProtocol {
                 mascot.edgeSitTimer += dt
                 if mascot.edgeSitTimer > 2 && !mascot.isEdgeSitting {
                     mascot.isEdgeSitting = true
-                    ctrl.claudeView.facingRight = nearLeft // face outward
+                    ctrl.claudeView.facingRight = nearLeft
                     mascot.setExpression(.happy, duration: 0)
                 }
             } else {
@@ -131,12 +90,8 @@ final class IdleState: MascotStateProtocol {
             return
         }
 
-        // Visual updates (only if no micro-animation is overriding)
-        if currentMicro == nil {
-            ctrl.claudeView.legFrame = 0
-            ctrl.claudeView.currentLegs = legsIdle
-            ctrl.claudeView.armsRaised = false
-        }
+        // Micro-animation system
+        updateMicroAnimation(dt: dt, mascot: mascot, ctrl: ctrl)
     }
 
     func exit(mascot: MascotEntity) {
@@ -520,7 +475,7 @@ final class ThrownState: MascotStateProtocol {
         mascot.x += mascot.velocityX * dt
         mascot.y += mascot.velocityY * dt
 
-        // Screen edge bounce
+        // Screen edge bounce (when thrown)
         if mascot.x < ctrl.screenLeft {
             mascot.x = ctrl.screenLeft
             mascot.velocityX = abs(mascot.velocityX) * bounceDamping

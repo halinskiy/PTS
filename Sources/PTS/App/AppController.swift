@@ -406,14 +406,15 @@ final class AppController: NSObject, NSApplicationDelegate {
             guard !self.mascot.isDragged && !self.mascot.isThrown else { return }
 
             // Only ride if the moved window is the same one the pet is physically on.
-            // Compare the window's position BEFORE the move to petWindowFrame's origin.
             if let petWin = self.petWindowFrame {
                 let prevX = frame.origin.x - delta.dx
                 let prevY = frame.origin.y - delta.dy
-                guard abs(prevX - petWin.origin.x) < 60 && abs(prevY - petWin.origin.y) < 60 else {
-                    return  // Different window moved — skip riding to prevent teleportation
+                // Match by pre-move position + similar size
+                let posMatch = abs(prevX - petWin.origin.x) < 100 && abs(prevY - petWin.origin.y) < 100
+                let sizeMatch = abs(frame.width - petWin.width) < 50 && abs(frame.height - petWin.height) < 50
+                guard posMatch && sizeMatch else {
+                    return  // Different window moved
                 }
-                // Update pet's window to new position
                 self.petWindowFrame = frame
                 self.petWindowFloorY = self.computeWindowFloorY(for: frame)
             }
@@ -474,42 +475,29 @@ final class AppController: NSObject, NSApplicationDelegate {
         windowTracker.onWindowChanged = { [weak self] frame in
             guard let self = self else { return }
             let wasOnWindow = self.level == .window
-            let hadWindow = self.activeWindowFrame != nil
-            let oldActiveFrame = self.activeWindowFrame
             self.activeWindowFrame = frame
 
             if let frame = frame {
                 self.windowFloorY = self.computeWindowFloorY(for: frame)
             }
 
-            // Only throw the pet if it was on the frontmost (WindowTracker-tracked) window.
-            // If the pet is on a different (non-frontmost) window, it stays put.
-            if wasOnWindow && !self.mascot.isDragged && !self.mascot.isThrown {
-                let petIsOnFrontmost: Bool
-                if let petWin = self.petWindowFrame, let oldActive = oldActiveFrame {
-                    petIsOnFrontmost = abs(petWin.midX - oldActive.midX) < 60
-                        && abs(petWin.midY - oldActive.midY) < 60
-                } else {
-                    petIsOnFrontmost = true
-                }
-
-                if petIsOnFrontmost {
-                    if frame == nil {
+            // If pet is on a window, check if that window still exists
+            // Sleeping pets stay on their window — they're "part of that space"
+            if wasOnWindow && !self.mascot.isDragged && !self.mascot.isThrown && !self.mascot.isAsleep {
+                if let petWin = self.petWindowFrame {
+                    let stillExists = self.visibleWindowFrames.contains {
+                        abs($0.midX - petWin.midX) < 80 && abs($0.midY - petWin.midY) < 80
+                    }
+                    if !stillExists {
                         self.mascot.velocityX = 0
-                        self.mascot.velocityY = 0
+                        self.mascot.velocityY = 50
                         self.mascot.setExpression(.scared)
                         self.mascot.seekActiveWindow = true
                         self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
-                    } else if hadWindow {
-                        self.mascot.velocityX = 0
-                        self.mascot.velocityY = 50
-                        self.mascot.setExpression(.surprised)
-                        self.mascot.seekActiveWindow = true
-                        self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
-                    }
-                    if self.mascot.isAsleep {
-                        self.mascot.isAsleep = false
-                        self.mascot.wakingUp = false
+                        if self.mascot.isAsleep {
+                            self.mascot.isAsleep = false
+                            self.mascot.wakingUp = false
+                        }
                     }
                 }
             }

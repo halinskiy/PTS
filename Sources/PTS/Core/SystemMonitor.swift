@@ -228,7 +228,7 @@ final class SystemMonitor {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-            task.arguments = ["-x", "claude"]
+            task.arguments = ["-f", "claude"]  // -f matches full command line (node claude, etc.)
             task.standardOutput = FileHandle.nullDevice
             task.standardError = FileHandle.nullDevice
             try? task.run()

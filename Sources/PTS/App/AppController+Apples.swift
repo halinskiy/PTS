@@ -26,6 +26,28 @@ extension AppController {
         apples.append(apple)
     }
 
+    /// Drop an apple at a specific position. Phantom apples are invisible navigation lures.
+    func feedAppleAt(x: CGFloat, y: CGFloat, phantom: Bool = false) {
+        guard window != nil else { return }
+
+        let appleView = AppleView(frame: NSRect(x: 0, y: 0, width: appleSize, height: appleSize))
+        appleView.wantsLayer = true
+        appleView.layer?.backgroundColor = NSColor.clear.cgColor
+        if phantom { appleView.alphaValue = 0 } // invisible
+        window.contentView?.addSubview(appleView)
+
+        let onDock = x >= dockLeft && x <= dockRight
+        var apple = AppleState(view: appleView)
+        apple.x = x
+        apple.y = y
+        apple.velocityX = CGFloat.random(in: -40...40)
+        apple.rotation = 0
+        apple.rotationSpeed = CGFloat.random(in: 1...3)
+        apple.floorY = (onDock ? dockFloorY : groundFloorY) - APPLE_PADDING
+        apple.isPhantom = phantom
+        apples.append(apple)
+    }
+
     func appleSpawnX(in screenFrame: CGRect) -> CGFloat {
         let minX = screenFrame.origin.x + 100
         let maxX = screenFrame.origin.x + screenFrame.width - 100
@@ -225,6 +247,17 @@ extension AppController {
         resolveAppleContacts()
 
         for i in 0..<apples.count {
+            // Universal proximity eat: if pet is close enough, eat it (phantom or real)
+            let eatDist: CGFloat = apples[i].isPhantom ? 45 : 40
+            let dx = abs(apples[i].x - crabX)
+            let dy = abs(apples[i].y - crabY)
+            if dx < eatDist && dy < 60 && (apples[i].phase == .resting || apples[i].isPhantom) {
+                toRemove.append(i)
+                continue
+            }
+
+            if apples[i].isPhantom { continue }
+
             guard level == levelForApple(apples[i]) else {
                 apples[i].view.rotation = apples[i].rotation
                 apples[i].view.frame.origin.x = apples[i].x - appleSize / 2
@@ -240,6 +273,11 @@ extension AppController {
                 height: appleSize
             )
             if appleHitsCrabHead(apple: apples[i], appleRect: appleRect, crabHeadRect: crabHeadRect) {
+                // When actively seeking, eat on head contact instead of deflecting
+                if isSeekingApples && apples[i].phase == .resting {
+                    toRemove.append(i)
+                    continue
+                }
                 if apples[i].crabHitCooldown > 0 {
                     apples[i].view.rotation = apples[i].rotation
                     apples[i].view.frame.origin.x = apples[i].x - appleSize / 2

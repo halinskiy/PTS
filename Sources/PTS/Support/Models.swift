@@ -36,4 +36,5 @@ struct AppleState {
     var bounceCount = 0
     var settleRotation: CGFloat = 0
     var settleWobbleTime: CGFloat = 0
+    var isPhantom = false  // invisible lure for autonomous navigation
 }

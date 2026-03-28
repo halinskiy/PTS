@@ -70,6 +70,8 @@ extension AppController {
         if now - lastDockCheck > dockCheckInterval {
             lastDockCheck = now
             refreshDockBounds()
+            // Keep accessibility menu state in sync
+            updateAccessibilityMenuState()
         }
 
         // Window tracking — use AXObserver with polling fallback
@@ -83,12 +85,30 @@ extension AppController {
             lastVisibleWindowsCheck = now
             visibleWindowFrames = WindowInfo.getAllFrames()
 
-            // If pet is on a non-frontmost window, detect if that window was closed
-            if level == .window, let petWin = petWindowFrame, petWin != activeWindowFrame {
-                let stillExists = visibleWindowFrames.contains {
-                    abs($0.midX - petWin.midX) < 60 && abs($0.midY - petWin.midY) < 60
+            // If pet is on a window: detect movement or closure via visibleWindowFrames
+            if level == .window, let petWin = petWindowFrame {
+                // Find pet's window — strict match: same size AND close position
+                let match = visibleWindowFrames.first {
+                    abs($0.width - petWin.width) < 20 && abs($0.height - petWin.height) < 20
+                        && abs($0.midX - petWin.midX) < 80 && abs($0.midY - petWin.midY) < 80
                 }
-                if !stillExists {
+                if let currentFrame = match {
+                    let movedX = currentFrame.origin.x - petWin.origin.x
+                    let movedY = currentFrame.origin.y - petWin.origin.y
+                    let displacement = sqrt(movedX * movedX + movedY * movedY)
+                    if displacement > 60 && !mascot.isAsleep {
+                        // Window moved too far — fall off surprised
+                        mascot.velocityX = -movedX * 0.3
+                        mascot.velocityY = 200
+                        mascot.setExpression(.surprised)
+                        stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
+                    } else if displacement > 2 {
+                        // Small movement — ride it smoothly
+                        petWindowFrame = currentFrame
+                        petWindowFloorY = computeWindowFloorY(for: currentFrame)
+                    }
+                } else if !mascot.isAsleep {
+                    // Window disappeared — fall
                     mascot.velocityX = 0
                     mascot.velocityY = 0
                     mascot.setExpression(.scared)
@@ -173,7 +193,7 @@ extension AppController {
             // Cursor idle near pet → approach to "sniff"
             if distToPet < 150 && cursorSpeed < 30 {
                 cursorIdleNearPetTimer += dt
-                if cursorIdleNearPetTimer > 5 && autoTargetX == nil && !isSeekingApples && !isAutonomousMode {
+                if cursorIdleNearPetTimer > 5 && autoTargetX == nil && !isSeekingApples {
                     let approachDir: CGFloat = mouseLocation.x > crabX ? 1 : -1
                     autoTargetX = mouseLocation.x - approachDir * 30
                     mascot.setExpression(.thinking, duration: 1.5)
@@ -226,7 +246,7 @@ extension AppController {
         }
 
         let timeSinceMove = now - lastMouseMoveTime
-        if let pending = pendingTargetX, abs(mouseX - pending) > 2 {
+        if let pending = pendingTargetX, abs(mouseX - pending) > 8 {
             if !isSeekingApples {
                 lastMouseMoveTime = now
                 mouseSettled = false
@@ -237,7 +257,18 @@ extension AppController {
                     }
                 }
             }
-            // Any mouse movement counts as user activity
+            // Large mouse movements (>60px) count as real user activity
+            // Small movements don't reset autonomous timer (trackpad jitter, idle drift)
+            if abs(mouseX - pending) > 60 {
+                if isAutonomousMode {
+                    exitAutonomousMode(now: now)
+                } else {
+                    lastUserActivityTime = now
+                }
+            }
+        }
+        // Typing always counts as user activity (from SystemMonitor)
+        if systemMonitor.isTypingFast {
             if isAutonomousMode {
                 exitAutonomousMode(now: now)
             } else {
@@ -362,15 +393,32 @@ extension AppController {
                 }
             }
 
-            // Window Climbing Detection — climb if target is ON the window
-            if let winFrame = activeWindowFrame, (level == .ground || level == .dock) {
-                let targetOnWindow = target >= winFrame.minX && target <= winFrame.maxX
-                if targetOnWindow {
+            // Window Climbing Detection — skip when chasing apple on ground/dock
+            let skipClimb = isSeekingApples && currentAppleSeekTargetLevel() != .window
+            let screenTop = NSScreen.main?.frame.height ?? 1000
+            if !skipClimb && (level == .ground || level == .dock) {
+                // Prefer top ~4 windows, skip windows too close to menubar (top 80px)
+                let topWindows = Array(visibleWindowFrames.prefix(4)).filter {
+                    $0.width > 80 && $0.height > 80 && $0.maxY < screenTop - 80
+                }
+                var climbWindow: NSRect? = nil
+                if let aw = activeWindowFrame, target >= aw.minX && target <= aw.maxX,
+                   aw.maxY < screenTop - 80 {
+                    climbWindow = aw
+                } else {
+                    climbWindow = topWindows.first {
+                        target >= $0.minX && target <= $0.maxX
+                    }
+                }
+                if let winFrame = climbWindow {
                     let sideMargin: CGFloat = 25
                     let nearLeft = abs(crabX - winFrame.minX) <= sideMargin
                     let nearRight = abs(crabX - winFrame.maxX) <= sideMargin
 
                     if nearLeft || nearRight {
+                        // Update activeWindowFrame so climbing code uses correct frame
+                        activeWindowFrame = winFrame
+                        windowFloorY = computeWindowFloorY(for: winFrame)
                         startClimbing(onLeft: nearLeft)
                         updateVisuals(dt, isWalking: false)
                         positionSprite()
@@ -379,6 +427,8 @@ extension AppController {
 
                     let nearWindow = crabX >= winFrame.minX - 60 && crabX <= winFrame.maxX + 60
                     if nearWindow {
+                        activeWindowFrame = winFrame
+                        windowFloorY = computeWindowFloorY(for: winFrame)
                         let entryDir: CGFloat = target < crabX ? -1 : 1
                         startJumpToWindow(frame: winFrame, direction: entryDir)
                         updateVisuals(dt, isWalking: false)
@@ -389,11 +439,13 @@ extension AppController {
             }
 
             if level == .window, let winFrame = petWindowFrame ?? activeWindowFrame {
-                if target < winFrame.minX || target > winFrame.maxX {
-                    let exitDir: CGFloat = target < winFrame.minX ? -1 : 1
+                // Force exit if seeking apple that's on a lower level (ground/dock)
+                let appleOnLowerLevel = isSeekingApples && currentAppleSeekTargetLevel() != .window
+                if target < winFrame.minX || target > winFrame.maxX || appleOnLowerLevel {
+                    let exitDir: CGFloat = target < winFrame.minX ? -1 : (target > winFrame.maxX ? 1 : (crabX < winFrame.midX ? -1 : 1))
 
-                    // 30% chance: climb down the window side instead of jumping
-                    if Float.random(in: 0...1) < 0.3 {
+                    // 15% chance: climb down the window side (not when chasing apples)
+                    if !isSeekingApples && Float.random(in: 0...1) < 0.15 {
                         mascot.wallSide = exitDir < 0 ? -1 : 1
                         mascot.wallClimbDir = -1  // start going down
                         stateMachine.forceTransition(to: StateKey.wallClimb, mascot: mascot)
@@ -466,7 +518,14 @@ extension AppController {
                     particleSystem?.emitFootprint(at: CGPoint(x: crabX, y: crabY))
                 }
 
-                if crabX >= minX && crabX <= maxX {
+                // Screen wrapping (snake-style) on ground level
+                if level == .ground {
+                    if crabX < screenLeft - spriteW {
+                        crabX = screenRight + spriteW * 0.5
+                    } else if crabX > screenRight + spriteW {
+                        crabX = screenLeft - spriteW * 0.5
+                    }
+                } else if crabX >= minX && crabX <= maxX {
                     crabX = max(minX, min(maxX, crabX))
                 }
 
@@ -500,6 +559,11 @@ extension AppController {
         }
 
         updateVisuals(dt, isWalking: isWalking)
+
+        // Run state machine for idle/walking states (micro-animations, edge sitting, wall climb)
+        if !isWalking && jumpPhase == .none {
+            stateMachine.update(dt: dt, mascot: mascot)
+        }
 
         // Hover reaction: subtle body perk + curious expression after sustained hover
         if mascot.isHovered && !mascot.isDragged && !mascot.isThrown && jumpPhase == .none && !mascot.isSqueezing {
@@ -896,11 +960,38 @@ extension AppController {
         claudeView.frame.origin.y = crabY
         claudeView.needsDisplay = true
 
-        shadowView.frame.origin.x = crabX - spriteW / 2
-        shadowView.frame.origin.y = currentShadowFloorY() - SHADOW_FLOOR_MARGIN
-        shadowView.facingRight = claudeView.facingRight
-        shadowView.legRows = claudeView.currentLegs.count
-        shadowView.needsDisplay = true
+        shadowView.isHidden = true
+
+        // Z-order: hide pet when it's behind a foreground window
+        let targetAlpha: CGFloat = isPetObscuredByForegroundWindow() ? 0 : 1
+        if claudeView.alphaValue != targetAlpha {
+            claudeView.alphaValue += (targetAlpha - claudeView.alphaValue) * 0.3 // smooth fade
+            shadowView.alphaValue = claudeView.alphaValue
+            if abs(claudeView.alphaValue - targetAlpha) < 0.05 {
+                claudeView.alphaValue = targetAlpha
+                shadowView.alphaValue = targetAlpha
+            }
+        }
+    }
+
+    /// Check if any visible window in front of the pet's window covers the pet's position.
+    /// visibleWindowFrames is ordered front-to-back (from CGWindowListCopyWindowInfo).
+    func isPetObscuredByForegroundWindow() -> Bool {
+        guard level == .window || mascot.isThrown, let petWin = petWindowFrame else { return false }
+        let petPoint = CGPoint(x: crabX, y: crabY + spriteH * 0.5)
+
+        for f in visibleWindowFrames {
+            // Found our window first → pet is on top, not obscured
+            if abs(f.midX - petWin.midX) < 50 && abs(f.midY - petWin.midY) < 50
+                && abs(f.width - petWin.width) < 50 {
+                return false
+            }
+            // Another window covers the pet's position → obscured
+            if f.contains(petPoint) {
+                return true
+            }
+        }
+        return false
     }
 
     func currentShadowFloorY() -> CGFloat {

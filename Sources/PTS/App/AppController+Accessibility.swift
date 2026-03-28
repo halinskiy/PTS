@@ -29,7 +29,6 @@ extension AppController {
     }
 
     func updateAccessibilityMenuState() {
-        accessibilityMenuItem?.isHidden = isAccessibilityGranted
         feedMenuItem?.isEnabled = true
         updateStatusBarIcon()
     }
@@ -51,15 +50,7 @@ extension AppController {
         menu.addItem(nameItem)
         menu.addItem(NSMenuItem.separator())
 
-        // Accessibility warning (hidden when granted)
-        let accessibilityItem = NSMenuItem(
-            title: "Enable Accessibility Access",
-            action: #selector(openAccessibilitySettings),
-            keyEquivalent: ""
-        )
-        accessibilityItem.image = makeAccessibilityWarningIcon()
-        menu.addItem(accessibilityItem)
-        menu.addItem(NSMenuItem.separator())
+        // Accessibility menu item removed — no longer prompts user
 
         // Feed
         let feedItem = NSMenuItem(title: "Drop Apple", action: #selector(feedApple), keyEquivalent: "f")
@@ -134,7 +125,6 @@ extension AppController {
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(exitApp), keyEquivalent: "q"))
 
         statusItem.menu = menu
-        accessibilityMenuItem = accessibilityItem
         feedMenuItem = feedItem
         aboutMenuItem = aboutItem
         checkForUpdatesMenuItem = updatesItem
@@ -148,7 +138,7 @@ extension AppController {
     func updateStatusBarIcon() {
         guard let button = statusItem?.button else { return }
 
-        if let image = makeStatusBarIcon(named: isAccessibilityGranted ? "ptsicon" : "ptsicon_warn") {
+        if let image = makeStatusBarIcon(named: "ptsicon") {
             image.size = NSSize(width: 18, height: 18)
             button.image = image
             button.imagePosition = .imageOnly
@@ -192,9 +182,9 @@ extension AppController {
         if isAccessibilityGranted {
             accessibilityPrePromptShownThisLaunch = false
             accessibilityPromptRequestedThisLaunch = false
-            updateAccessibilityMenuState()
             completeLaunch()
             activateAccessibilityFeaturesIfNeeded()
+            updateAccessibilityMenuState()  // AFTER activation so accessibilityFeaturesActive is true
             startAccessibilityPolling()
             return
         }
@@ -268,27 +258,39 @@ extension AppController {
     }
 
     func startAccessibilityPolling() {
-        if accessibilityPollTimer != nil {
+        if accessibilityPollTimer != nil { return }
+
+        // Once features are confirmed active, stop polling entirely
+        if accessibilityFeaturesActive {
+            accessibilityMenuItem?.isHidden = true
+            updateStatusBarIcon()
             return
         }
+
         accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
-            guard let self else {
+            guard let self else { timer.invalidate(); return }
+
+            // If features already active — trust that, stop polling
+            if self.accessibilityFeaturesActive {
+                self.accessibilityMenuItem?.isHidden = true
+                self.updateStatusBarIcon()
                 timer.invalidate()
+                self.accessibilityPollTimer = nil
                 return
             }
 
             let hasAccessibility = self.isAccessibilityGranted
-            self.accessibilityMenuItem?.isHidden = hasAccessibility
-            self.updateStatusBarIcon()
-
             if hasAccessibility {
                 self.accessibilityPromptRequestedThisLaunch = false
                 self.updateAccessibilityMenuState()
                 self.completeLaunch()
                 self.activateAccessibilityFeaturesIfNeeded()
-            } else {
-                self.deactivateAccessibilityFeatures()
+                // Stop polling after successful activation
+                timer.invalidate()
+                self.accessibilityPollTimer = nil
             }
+            // Do NOT deactivate if AXIsProcessTrusted returns false —
+            // it's unreliable for ad-hoc signed apps
         }
     }
 

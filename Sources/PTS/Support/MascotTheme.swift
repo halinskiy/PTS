@@ -12,11 +12,11 @@ final class MascotTheme {
     }
 
     static let presets: [Preset] = [
-        Preset(name: "Blue (Default)", hueShift: 0),    // base: 214°
+        Preset(name: "Blue",           hueShift: 0),    // base: 214°
         Preset(name: "Teal",           hueShift: -34),  // → 180°
         Preset(name: "Green",          hueShift: -94),  // → 120°
         Preset(name: "Yellow",         hueShift: -154), // → 60°
-        Preset(name: "Orange",         hueShift: 176),  // → 30°
+        Preset(name: "Orange (Default)", hueShift: 176),  // → 30°
         Preset(name: "Red",            hueShift: 146),  // → 0°
         Preset(name: "Pink",           hueShift: 106),  // → 320°
         Preset(name: "Purple",         hueShift: 56),   // → 270°
@@ -32,13 +32,19 @@ final class MascotTheme {
 
     private init() {
         let saved = UserDefaults.standard.double(forKey: "mascotHueShift")
-        hueShift = CGFloat(saved)
+        // Default to orange (176) if no preference saved yet
+        if saved == 0 && !UserDefaults.standard.bool(forKey: "mascotHueShiftSet") {
+            hueShift = 176  // orange
+        } else {
+            hueShift = CGFloat(saved)
+        }
         recomputeColors()
     }
 
     func setHueShift(_ shift: CGFloat) {
         hueShift = shift
         UserDefaults.standard.set(Double(shift), forKey: "mascotHueShift")
+        UserDefaults.standard.set(true, forKey: "mascotHueShiftSet")
         recomputeColors()
     }
 

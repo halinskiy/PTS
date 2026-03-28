@@ -26,10 +26,41 @@ extension AppController {
             return
         }
 
+        // If pet is on a hidden window (buried under others) for too long, escape to ground
+        if level == .window, let petWin = petWindowFrame, mascot.isAsleep {
+            let petIsVisible = isPetWindowOnTop(petWin)
+            if !petIsVisible {
+                mascot.hiddenOnWindowTimer += CGFloat(now - (mascot.lastVisibleTime > 0 ? mascot.lastVisibleTime : now))
+                mascot.lastVisibleTime = now
+                if mascot.hiddenOnWindowTimer > 60 {
+                    // Escape: wake up, jump to ground, start exploring
+                    mascot.isAsleep = false
+                    mascot.wakingUp = false
+                    mascot.hiddenOnWindowTimer = 0
+                    petWindowFrame = nil
+                    level = .ground
+                    crabY = groundFloorY
+                    lastActivityTime = now
+                    mascot.setExpression(.surprised, duration: 1.5)
+                    if !isAutonomousMode { enterAutonomousMode(now: now) }
+                    autonomousPhase = .walking
+                    autonomousPhaseStartTime = now
+                    autonomousNextTargetTime = now + 0.5
+                    return
+                }
+            } else {
+                mascot.hiddenOnWindowTimer = 0
+                mascot.lastVisibleTime = now
+            }
+        } else {
+            mascot.hiddenOnWindowTimer = 0
+            mascot.lastVisibleTime = now
+        }
+
         switch autonomousPhase {
         case .walking:
-            if now - autonomousPhaseStartTime >= 60 {
-                // Switch to sleep phase
+            if now - autonomousPhaseStartTime >= 300 {
+                // Switch to sleep phase (after 5 minutes of walking)
                 autonomousPhase = .sleeping
                 autonomousPhaseStartTime = now
                 autoTargetX = nil
@@ -38,15 +69,27 @@ extension AppController {
             }
             // Keep mascot awake during the roam phase
             lastActivityTime = now
+
+            // Phantom apples: drop invisible lure every 15-30s to guide navigation
+            if !isSeekingApples && now >= autonomousNextTargetTime + 10
+                && apples.isEmpty && autoTargetX == nil && jumpPhase == .none {
+                dropPhantomApple()
+            }
+
             // Pick a new random destination when idle
             if autoTargetX == nil, !isSeekingApples, !mascot.isDragged, !mascot.isThrown, jumpPhase == .none {
                 if now >= autonomousNextTargetTime {
                     pickAutonomousWalkTarget(now: now)
                 }
+                // Random hops while walking (15% chance every 3-8s)
+            } else if autoTargetX != nil && jumpPhase == .none && !mascot.isDragged && !mascot.isThrown {
+                if Int.random(in: 0..<600) == 0 { // ~once per 10s at 60fps
+                    startInPlaceJump()
+                }
             }
 
         case .sleeping:
-            if now - autonomousPhaseStartTime >= 120 {
+            if now - autonomousPhaseStartTime >= 60 {  // sleep only 1 minute
                 // 3% chance to breed (spawn a clone) — max 3 instances
                 if Float.random(in: 0...1) < 0.03 {
                     spawnCloneIfAllowed()
@@ -69,13 +112,28 @@ extension AppController {
 
     func pickAutonomousWalkTarget(now: TimeInterval) {
         guard screenRight > screenLeft + 40 else { return }
-        autonomousNextTargetTime = now + Double.random(in: 5.0...15.0)
+        autonomousNextTargetTime = now + Double.random(in: 1.5...5.0)
 
-        // 15% chance: pick a window edge to sit on (seek cozy spot)
+        let topWindows = Array(visibleWindowFrames.prefix(4)).filter { $0.width > 100 && $0.height > 80 }
+
+        // When on a window: 50% chance to LEAVE it (pick ground/dock/different window)
+        if level == .window, let petWin = petWindowFrame, Double.random(in: 0...1) < 0.5 {
+            // Pick a target guaranteed to be OUTSIDE current window
+            let otherWindows = topWindows.filter { abs($0.midX - petWin.midX) > 80 }
+            if let other = otherWindows.randomElement(), Double.random(in: 0...1) < 0.5 {
+                autoTargetX = CGFloat.random(in: other.minX + 20...other.maxX - 20)
+            } else {
+                // Pick ground far from window
+                autoTargetX = Bool.random()
+                    ? CGFloat.random(in: screenLeft...max(screenLeft + 50, petWin.minX - 80))
+                    : CGFloat.random(in: min(screenRight - 50, petWin.maxX + 80)...screenRight)
+            }
+            return
+        }
+
+        // 15% chance: pick a window edge to sit on
         if Double.random(in: 0...1) < 0.15 {
-            let candidates = visibleWindowFrames.filter { $0.width > 100 }
-            if let win = candidates.randomElement() {
-                // Pick left or right edge
+            if let win = topWindows.randomElement() {
                 autoTargetX = Bool.random() ? win.minX + 8 : win.maxX - 8
                 return
             }
@@ -83,12 +141,11 @@ extension AppController {
 
         let roll = Double.random(in: 0...1)
 
-        // 40% — pick a point on a visible window (excluding current one)
-        if roll < 0.40 {
-            let candidates = visibleWindowFrames.filter { f in
-                guard f.width > 80 else { return false }
+        // 45% — pick a point on a TOP visible window (different from current)
+        if roll < 0.45 {
+            let candidates = topWindows.filter { f in
                 if level == .window, let petWin = petWindowFrame {
-                    return abs(f.midX - petWin.midX) > 80  // not the same window
+                    return abs(f.midX - petWin.midX) > 80
                 }
                 return true
             }
@@ -103,8 +160,8 @@ extension AppController {
             }
         }
 
-        // 20% — target dock (if not already there and dock is visible)
-        if roll < 0.60 && level != .dock && dockRight > dockLeft + 20 {
+        // 20% — target dock
+        if roll < 0.65 && level != .dock && dockRight > dockLeft + 20 {
             autoTargetX = CGFloat.random(in: dockLeft + 10...dockRight - 10)
             return
         }
@@ -200,6 +257,61 @@ extension AppController {
         for item in submenu.items where !item.isSeparatorItem {
             item.state = Double(item.tag) == active ? .on : .off
         }
+    }
+
+    // MARK: - Window visibility check
+
+    /// Returns true if the pet's window is the topmost at the pet's position
+    // MARK: - Phantom Apples (invisible navigation lures)
+
+    func dropPhantomApple() {
+        guard window != nil else { return }
+        let topWindows = Array(visibleWindowFrames.prefix(4)).filter { $0.width > 100 && $0.height > 80 }
+
+        let appleView = AppleView(frame: NSRect(x: 0, y: 0, width: appleSize, height: appleSize))
+        appleView.wantsLayer = true
+        appleView.layer?.backgroundColor = NSColor.clear.cgColor
+        appleView.alphaValue = 0  // invisible
+        window.contentView?.addSubview(appleView)
+
+        var apple = AppleState(view: appleView)
+        apple.isPhantom = true
+        apple.phase = .resting  // already settled
+        apple.bounceCount = 99  // prevent re-bouncing
+
+        let roll = Float.random(in: 0...1)
+        if roll < 0.5, let win = topWindows.randomElement() {
+            // Place on top of a window
+            apple.x = CGFloat.random(in: win.minX + 20...win.maxX - 20)
+            apple.y = computeWindowFloorY(for: win) - APPLE_PADDING
+            apple.floorY = apple.y
+        } else if roll < 0.7 && dockRight > dockLeft + 20 {
+            // Place on dock
+            apple.x = CGFloat.random(in: dockLeft + 10...dockRight - 10)
+            apple.y = dockFloorY - APPLE_PADDING
+            apple.floorY = apple.y
+        } else {
+            // Place on ground
+            apple.x = CGFloat.random(in: screenLeft + 50...screenRight - 50)
+            apple.y = groundFloorY - APPLE_PADDING
+            apple.floorY = apple.y
+        }
+
+        apples.append(apple)
+    }
+
+    func isPetWindowOnTop(_ petWin: NSRect) -> Bool {
+        // Check if any window in visibleWindowFrames is ABOVE petWin at the pet's X position
+        // visibleWindowFrames is ordered from front to back (CGWindowList order)
+        for f in visibleWindowFrames {
+            // Skip the pet's own window
+            if abs(f.midX - petWin.midX) < 50 && abs(f.midY - petWin.midY) < 50 { return true }
+            // If another window covers the pet's position, pet is hidden
+            if f.contains(CGPoint(x: mascot.x, y: mascot.y + mascot.spriteH * 0.5)) {
+                return false  // another window is in front
+            }
+        }
+        return true  // no window covers the pet
     }
 
     // MARK: - Breeding (self-replication)

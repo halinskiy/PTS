@@ -303,7 +303,7 @@ extension AppController {
 
     func shouldStartAppleHop(remainingDistance: CGFloat, direction: CGFloat) -> Bool {
         guard isSeekingApples, let nextTrigger = appleSeekHopTriggers.first else { return false }
-        guard remainingDistance > autoThresh * 2 else { return false }
+        guard remainingDistance > 100 else { return false } // don't hop when close — just walk to eat
         guard remainingDistance <= nextTrigger else { return false }
         guard canLandHop(on: level, direction: direction) else { return false }
         guard !isAppleHopTooCloseToDockEdge(direction: direction) else { return false }
