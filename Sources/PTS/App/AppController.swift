@@ -231,6 +231,9 @@ final class AppController: NSObject, NSApplicationDelegate {
     var cursorSpeed: CGFloat = 0
     var cursorIdleNearPetTimer: CGFloat = 0
 
+    // MARK: - Anti-oscillation
+    var windowClimbCooldown: TimeInterval = 0  // prevents climb-exit-climb loops
+
     // MARK: - App body language
     enum AppBehavior { case none, watching, coding, vibing }
     var activeAppBehavior: AppBehavior = .none
@@ -396,36 +399,53 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
         }
 
+        // MARK: Notification banner reaction
+        systemMonitor.onNotificationBanner = { [weak self] in
+            guard let self = self else { return }
+            guard !self.mascot.isDragged else { return }
+            let now = CACurrentMediaTime()
+            guard now - self.lastReactionTime > 2 else { return }
+            self.lastReactionTime = now
+
+            if self.level == .window && !self.mascot.isThrown && self.jumpPhase == .none {
+                // On window → fall off scared
+                self.mascot.velocityX = CGFloat.random(in: -200...200)
+                self.mascot.velocityY = 500
+                self.mascot.setExpression(.scared, duration: 2.0)
+                self.mascot.noWindowLandingUntil = now + 1.5
+                self.windowClimbCooldown = now + 3.0
+                self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
+            } else if !self.mascot.isThrown && self.jumpPhase == .none {
+                // On ground/dock → startled jump
+                self.mascot.setExpression(.surprised, duration: 2.0)
+                self.startInPlaceJump()
+                self.particleSystem?.emitStar(at: CGPoint(x: self.mascot.x, y: self.mascot.y + self.mascot.spriteH))
+            }
+
+            // Wake up if sleeping
+            if self.mascot.isAsleep {
+                self.mascot.isAsleep = false
+                self.mascot.wakingUp = false
+                self.mascot.lastActivityTime = now
+            }
+        }
+
         windowTracker.onWindowMoved = { [weak self] frame, delta in
             guard let self = self else { return }
-            // activeWindowFrame always tracks the frontmost window (for climbing decisions)
             self.activeWindowFrame = frame
             self.windowFloorY = self.computeWindowFloorY(for: frame)
 
             guard self.level == .window else { return }
             guard !self.mascot.isDragged && !self.mascot.isThrown else { return }
 
-            // Only ride if the moved window is the same one the pet is physically on.
-            if let petWin = self.petWindowFrame {
-                let prevX = frame.origin.x - delta.dx
-                let prevY = frame.origin.y - delta.dy
-                // Match by pre-move position + similar size
-                let posMatch = abs(prevX - petWin.origin.x) < 100 && abs(prevY - petWin.origin.y) < 100
-                let sizeMatch = abs(frame.width - petWin.width) < 50 && abs(frame.height - petWin.height) < 50
-                guard posMatch && sizeMatch else {
-                    return  // Different window moved
-                }
-                self.petWindowFrame = frame
-                self.petWindowFloorY = self.computeWindowFloorY(for: frame)
-            }
-
             let displacement = sqrt(delta.dx * delta.dx + delta.dy * delta.dy)
 
-            // Detach threshold: if window teleports too far, mascot falls off
-            if displacement > 80 {
-                self.mascot.velocityX = -delta.dx * 0.5
-                self.mascot.velocityY = 200
-                self.mascot.setExpression(.scared)
+            if displacement > 2 {
+                self.mascot.velocityX = -delta.dx * 0.5 + CGFloat.random(in: -100...100)
+                self.mascot.velocityY = 400
+                self.mascot.setExpression(.surprised)
+                self.mascot.noWindowLandingUntil = CACurrentMediaTime() + 1.5
+                self.windowClimbCooldown = CACurrentMediaTime() + 3.0
                 self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
                 if self.mascot.isAsleep {
                     self.mascot.isAsleep = false
@@ -434,12 +454,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                 return
             }
 
-            // Ride the window — follow its movement
-            self.mascot.x += delta.dx
-            self.mascot.y += delta.dy
-
-            // Wake up startled if sleeping and window moves significantly
-            if self.mascot.isAsleep && displacement > 5 {
+            // Small movement — wake up if sleeping
+            if self.mascot.isAsleep && displacement > 1 {
                 self.mascot.isAsleep = false
                 self.mascot.wakingUp = true
                 self.mascot.lastActivityTime = CACurrentMediaTime()
@@ -481,24 +497,17 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.windowFloorY = self.computeWindowFloorY(for: frame)
             }
 
-            // If pet is on a window, check if that window still exists
-            // Sleeping pets stay on their window — they're "part of that space"
+            // Pet was on a window — fall off with animation
             if wasOnWindow && !self.mascot.isDragged && !self.mascot.isThrown && !self.mascot.isAsleep {
-                if let petWin = self.petWindowFrame {
-                    let stillExists = self.visibleWindowFrames.contains {
-                        abs($0.midX - petWin.midX) < 80 && abs($0.midY - petWin.midY) < 80
-                    }
-                    if !stillExists {
-                        self.mascot.velocityX = 0
-                        self.mascot.velocityY = 50
-                        self.mascot.setExpression(.scared)
-                        self.mascot.seekActiveWindow = true
-                        self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
-                        if self.mascot.isAsleep {
-                            self.mascot.isAsleep = false
-                            self.mascot.wakingUp = false
-                        }
-                    }
+                self.mascot.velocityX = CGFloat.random(in: -120...120)
+                self.mascot.velocityY = 400
+                self.mascot.setExpression(.surprised)
+                self.mascot.noWindowLandingUntil = CACurrentMediaTime() + 1.5
+                self.windowClimbCooldown = CACurrentMediaTime() + 3.0
+                self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
+                // After landing, walk toward new active window
+                if let newFrame = frame {
+                    self.mascot.seekActiveWindow = true
                 }
             }
         }

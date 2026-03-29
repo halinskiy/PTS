@@ -247,11 +247,12 @@ extension AppController {
         resolveAppleContacts()
 
         for i in 0..<apples.count {
-            // Universal proximity eat: if pet is close enough, eat it (phantom or real)
-            let eatDist: CGFloat = apples[i].isPhantom ? 45 : 40
+            // Universal proximity eat: if pet is close enough, eat it
+            let eatDist: CGFloat = apples[i].isPhantom ? 45 : 50
             let dx = abs(apples[i].x - crabX)
             let dy = abs(apples[i].y - crabY)
-            if dx < eatDist && dy < 60 && (apples[i].phase == .resting || apples[i].isPhantom) {
+            // Eat any apple when close enough — no phase restriction
+            if dx < eatDist && dy < 80 {
                 toRemove.append(i)
                 continue
             }
@@ -305,17 +306,27 @@ extension AppController {
             apples[i].view.needsDisplay = true
         }
 
-        for i in toRemove.reversed() {
-            apples[i].view.removeFromSuperview()
-            apples.remove(at: i)
-            // Track apple eaten for mood system
-            applesEatenThisFrame += 1
-            moodSystem.onAppleEaten()
-            mascot.setExpression(.happy, duration: 1.0)
-        }
+        if !toRemove.isEmpty {
+            for i in toRemove.reversed() {
+                apples[i].view.removeFromSuperview()
+                apples.remove(at: i)
+                applesEatenThisFrame += 1
+                moodSystem.onAppleEaten()
+                mascot.setExpression(.happy, duration: 1.0)
+            }
 
-        if isSeekingApples && apples.isEmpty {
-            endAppleSeek(now: CACurrentMediaTime())
+            if isSeekingApples {
+                if apples.isEmpty {
+                    endAppleSeek(now: CACurrentMediaTime())
+                } else {
+                    // Brief pause before chasing the next apple
+                    appleSeekStartTime = CACurrentMediaTime()
+                    appleSeekDelay = 0.8
+                    appleSeekTargetID = nil
+                    appleSeekHopTriggers.removeAll()
+                    autoTargetX = nil
+                }
+            }
         }
     }
 

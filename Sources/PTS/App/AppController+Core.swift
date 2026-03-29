@@ -1,5 +1,19 @@
 import Cocoa
 
+extension String {
+    func append(toFile path: String) throws {
+        let data = self.data(using: .utf8) ?? Data()
+        if FileManager.default.fileExists(atPath: path) {
+            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            try data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}
+
 extension AppController {
     func debugLog(_ message: String) {
         guard debugEnabled else { return }

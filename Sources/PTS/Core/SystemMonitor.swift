@@ -46,24 +46,36 @@ final class SystemMonitor {
     private var batteryCheckTimer: Timer?
     private var darkModeObserver: NSObjectProtocol?
 
+    // Notification banner detection
+    private var notificationBannerTimer: Timer?
+    private var lastNotificationWindowCount = 0
+    private var notificationCooldown: TimeInterval = 0
+
     // Callbacks
     var onTypingSpeedChanged: ((Float) -> Void)?
     var onCPUChanged: ((Float) -> Void)?
     var onScreenshot: (() -> Void)?
     var onAppSwitch: ((String, String?) -> Void)?  // (appName, bundleIdentifier)
+    var onNotificationBanner: (() -> Void)?
     var onLowPowerModeChanged: ((Bool) -> Void)?
     var onDarkModeChanged: (() -> Void)?
 
     // MARK: - Start/Stop
 
+    /// Monitors that require Accessibility permission
     func startMonitoring() {
         startKeyMonitoring()
         startCPUMonitoring()
         startNotificationMonitoring()
         startAppSwitchMonitoring()
+    }
+
+    /// Monitors that work without Accessibility (CGWindowList, process checks, etc.)
+    func startNonAXMonitoring() {
         startClaudeMonitoring()
         startBatteryMonitoring()
         startDarkModeMonitoring()
+        startNotificationBannerMonitoring()
     }
 
     func stopMonitoring() {
@@ -77,6 +89,8 @@ final class SystemMonitor {
         claudeCheckTimer = nil
         batteryCheckTimer?.invalidate()
         batteryCheckTimer = nil
+        notificationBannerTimer?.invalidate()
+        notificationBannerTimer = nil
         if let obs = darkModeObserver {
             DistributedNotificationCenter.default().removeObserver(obs)
             darkModeObserver = nil
@@ -209,6 +223,33 @@ final class SystemMonitor {
         ) { [weak self] _ in
             self?.onDarkModeChanged?()
         }
+    }
+
+    // MARK: - Notification Banner Detection
+
+    private func startNotificationBannerMonitoring() {
+        lastNotificationWindowCount = countNotificationWindows()
+        notificationBannerTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let now = CACurrentMediaTime()
+            let current = self.countNotificationWindows()
+            if current > self.lastNotificationWindowCount && now > self.notificationCooldown {
+                self.notificationCooldown = now + 3.0
+                self.onNotificationBanner?()
+            }
+            self.lastNotificationWindowCount = current
+        }
+    }
+
+    private func countNotificationWindows() -> Int {
+        let options = CGWindowListOption([.optionOnScreenOnly, .excludeDesktopElements])
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return 0 }
+        var count = 0
+        for info in list {
+            guard let owner = info[kCGWindowOwnerName as String] as? String else { continue }
+            if owner.contains("Notification") { count += 1 }
+        }
+        return count
     }
 
     // MARK: - Claude Code Detection

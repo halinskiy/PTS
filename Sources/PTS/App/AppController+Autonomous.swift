@@ -10,7 +10,7 @@ extension AppController {
     var autonomousIdleThreshold: TimeInterval {
         let saved = UserDefaults.standard.double(forKey: "mascotAutoWalkDelay")
         if saved < 0 { return -1 }          // Never
-        return saved > 0 ? saved : 300.0    // default 5 min
+        return saved > 0 ? saved : 60.0     // default 1 min
     }
 
     // MARK: Lifecycle
@@ -114,16 +114,19 @@ extension AppController {
         guard screenRight > screenLeft + 40 else { return }
         autonomousNextTargetTime = now + Double.random(in: 1.5...5.0)
 
-        let topWindows = Array(visibleWindowFrames.prefix(4)).filter { $0.width > 100 && $0.height > 80 }
+        // Top 3 visible windows = current Space windows
+        let currentSpaceWindows = Array(visibleWindowFrames.prefix(3)).filter {
+            $0.width > 100 && $0.height > 80
+        }
 
-        // When on a window: 50% chance to LEAVE it (pick ground/dock/different window)
+        // When on a window: 50% chance to LEAVE it (go to another window/ground/dock)
         if level == .window, let petWin = petWindowFrame, Double.random(in: 0...1) < 0.5 {
-            // Pick a target guaranteed to be OUTSIDE current window
-            let otherWindows = topWindows.filter { abs($0.midX - petWin.midX) > 80 }
-            if let other = otherWindows.randomElement(), Double.random(in: 0...1) < 0.5 {
+            let otherWindows = currentSpaceWindows.filter { abs($0.midX - petWin.midX) > 80 }
+            if let other = otherWindows.randomElement(), Double.random(in: 0...1) < 0.6 {
+                // Jump to another window
                 autoTargetX = CGFloat.random(in: other.minX + 20...other.maxX - 20)
             } else {
-                // Pick ground far from window
+                // Go to ground
                 autoTargetX = Bool.random()
                     ? CGFloat.random(in: screenLeft...max(screenLeft + 50, petWin.minX - 80))
                     : CGFloat.random(in: min(screenRight - 50, petWin.maxX + 80)...screenRight)
@@ -132,31 +135,21 @@ extension AppController {
         }
 
         // 15% chance: pick a window edge to sit on
-        if Double.random(in: 0...1) < 0.15 {
-            if let win = topWindows.randomElement() {
-                autoTargetX = Bool.random() ? win.minX + 8 : win.maxX - 8
-                return
-            }
+        if Double.random(in: 0...1) < 0.15, let win = currentSpaceWindows.randomElement() {
+            autoTargetX = Bool.random() ? win.minX + 8 : win.maxX - 8
+            return
         }
 
         let roll = Double.random(in: 0...1)
 
-        // 45% — pick a point on a TOP visible window (different from current)
-        if roll < 0.45 {
-            let candidates = topWindows.filter { f in
-                if level == .window, let petWin = petWindowFrame {
-                    return abs(f.midX - petWin.midX) > 80
-                }
-                return true
-            }
-            if let win = candidates.randomElement() {
-                let margin: CGFloat = 30
-                let lo = win.minX + margin
-                let hi = win.maxX - margin
-                if lo < hi {
-                    autoTargetX = CGFloat.random(in: lo...hi)
-                    return
-                }
+        // 40% — pick a point on a visible window in current Space
+        if roll < 0.40, let win = currentSpaceWindows.randomElement() {
+            let margin: CGFloat = 30
+            let lo = win.minX + margin
+            let hi = win.maxX - margin
+            if lo < hi {
+                autoTargetX = CGFloat.random(in: lo...hi)
+                return
             }
         }
 

@@ -537,9 +537,9 @@ final class ThrownState: MascotStateProtocol {
             ctrl.particleSystem?.emitDust(at: CGPoint(x: mascot.x, y: mascot.y), count: 3)
         }
 
-        // Window top collision — check all visible windows, not just the active one.
-        // This lets the mascot land on (or be placed on) any window when thrown/dropped.
-        if mascot.velocityY < 0 {
+        // Window top collision — skip if recently thrown off a window (cooldown)
+        let canLandOnWindows = CACurrentMediaTime() >= mascot.noWindowLandingUntil
+        if mascot.velocityY < 0 && canLandOnWindows {
             // Build candidate list: active window first, then all others
             var candidates: [NSRect] = []
             if let active = ctrl.activeWindowFrame { candidates.append(active) }

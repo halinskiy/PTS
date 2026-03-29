@@ -406,6 +406,9 @@ extension AppController {
         // Start state machine in idle
         stateMachine.transition(to: StateKey.idle, mascot: mascot)
 
+        // Start monitors that don't need Accessibility (CGWindowList-based)
+        systemMonitor.startNonAXMonitoring()
+
         startDisplayLoop()
     }
 

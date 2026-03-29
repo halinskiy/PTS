@@ -63,6 +63,9 @@ final class MascotEntity {
     var hiddenOnWindowTimer: CGFloat = 0
     var lastVisibleTime: TimeInterval = 0
 
+    // Prevent re-landing on windows right after being thrown off
+    var noWindowLandingUntil: TimeInterval = 0
+
     // Wall climbing state
     var wallSide: Int = 0  // -1 left, +1 right, 0 none
     var wallClimbDir: CGFloat = 0  // +1 up, -1 down, 0 hanging
