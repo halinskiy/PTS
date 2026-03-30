@@ -6,9 +6,9 @@
     <description>Updates for PTS</description>
     <language>en</language>
     <item>
-      <title>Version 2.5.0</title>
-      <sparkle:version>2.5.0</sparkle:version>
-      <sparkle:shortVersionString>2.5.0</sparkle:shortVersionString>
+      <title>Version 2.5.1</title>
+      <sparkle:version>2.5.1</sparkle:version>
+      <sparkle:shortVersionString>2.5.1</sparkle:shortVersionString>
       <pubDate>Sun, 30 Mar 2026 15:15:00 +0000</pubDate>
       <description><![CDATA[
         <h2>PTS v2.5.0 — Sparkle Auto-Updates</h2>
@@ -21,7 +21,7 @@
         </ul>
       ]]></description>
       <enclosure
-        url="https://github.com/halinskiy/PTS/releases/download/v2.5.0/PTS.zip"
+        url="https://github.com/halinskiy/PTS/releases/download/v2.5.1/PTS.zip"
         sparkle:edSignature="CII4aV8pHhhBEo3wPLaqEFKdgfgy8snH7qLLBPGNNE2x7aUL4+j1DtGKGkJ67UAeXLXGjXr9dfA2ew0MjH0xCg=="
         length="247193"
         type="application/octet-stream" />
