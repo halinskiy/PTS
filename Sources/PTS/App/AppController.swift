@@ -232,7 +232,9 @@ final class AppController: NSObject, NSApplicationDelegate {
     var cursorIdleNearPetTimer: CGFloat = 0
 
     // MARK: - Anti-oscillation
-    var windowClimbCooldown: TimeInterval = 0  // prevents climb-exit-climb loops
+    var windowClimbCooldown: TimeInterval = 0
+    var failedClimbCount = 0
+    var failedClimbCooldownUntil: TimeInterval = 0
 
     // MARK: - App body language
     enum AppBehavior { case none, watching, coding, vibing }
@@ -412,8 +414,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.mascot.velocityX = CGFloat.random(in: -200...200)
                 self.mascot.velocityY = 500
                 self.mascot.setExpression(.scared, duration: 2.0)
-                self.mascot.noWindowLandingUntil = now + 1.5
-                self.windowClimbCooldown = now + 3.0
+                self.mascot.noWindowLandingUntil = now + 2.5
+                self.windowClimbCooldown = now + 2.5
                 self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
             } else if !self.mascot.isThrown && self.jumpPhase == .none {
                 // On ground/dock → startled jump
@@ -441,10 +443,11 @@ final class AppController: NSObject, NSApplicationDelegate {
             let displacement = sqrt(delta.dx * delta.dx + delta.dy * delta.dy)
 
             if displacement > 2 {
+
                 self.mascot.velocityX = -delta.dx * 0.5 + CGFloat.random(in: -100...100)
                 self.mascot.velocityY = 400
                 self.mascot.setExpression(.surprised)
-                self.mascot.noWindowLandingUntil = CACurrentMediaTime() + 1.5
+                self.mascot.noWindowLandingUntil = CACurrentMediaTime() + 2.5
                 self.windowClimbCooldown = CACurrentMediaTime() + 3.0
                 self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
                 if self.mascot.isAsleep {
@@ -463,8 +466,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.particleSystem?.emitStar(at: CGPoint(x: self.mascot.x, y: self.mascot.y + self.mascot.spriteH))
             }
 
-            // If window moves down fast, mascot bounces off temporarily
             if delta.dy < -25 && !self.mascot.isAsleep {
+
                 let bounceStrength = min(400, -delta.dy * 3)
                 self.mascot.velocityX = 0
                 self.mascot.velocityY = bounceStrength
@@ -497,12 +500,12 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.windowFloorY = self.computeWindowFloorY(for: frame)
             }
 
-            // Pet was on a window — fall off with animation
             if wasOnWindow && !self.mascot.isDragged && !self.mascot.isThrown && !self.mascot.isAsleep {
+
                 self.mascot.velocityX = CGFloat.random(in: -120...120)
                 self.mascot.velocityY = 400
                 self.mascot.setExpression(.surprised)
-                self.mascot.noWindowLandingUntil = CACurrentMediaTime() + 1.5
+                self.mascot.noWindowLandingUntil = CACurrentMediaTime() + 2.5
                 self.windowClimbCooldown = CACurrentMediaTime() + 3.0
                 self.stateMachine.forceTransition(to: StateKey.thrown, mascot: self.mascot)
                 // After landing, walk toward new active window

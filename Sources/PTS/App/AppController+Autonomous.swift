@@ -10,7 +10,7 @@ extension AppController {
     var autonomousIdleThreshold: TimeInterval {
         let saved = UserDefaults.standard.double(forKey: "mascotAutoWalkDelay")
         if saved < 0 { return -1 }          // Never
-        return saved > 0 ? saved : 10.0     // default 10 sec
+        return 10.0                         // always 10s — pet should be active
     }
 
     // MARK: Lifecycle
@@ -60,32 +60,43 @@ extension AppController {
         switch autonomousPhase {
         case .walking:
             if now - autonomousPhaseStartTime >= 300 {
-                // Switch to sleep phase (after 5 minutes of walking)
+                // Before sleeping: go to the active window if not already there
+                if level != .window, let aw = activeWindowFrame {
+                    // Walk toward active window to sleep on it
+                    autoTargetX = aw.midX
+                    lastActivityTime = now
+                    // Give 30s to reach the window, then force sleep
+                    if now - autonomousPhaseStartTime >= 330 {
+                        autonomousPhase = .sleeping
+                        autonomousPhaseStartTime = now
+                        autoTargetX = nil
+                    }
+                    return
+                }
+                // Already on a window or no window available — sleep here
                 autonomousPhase = .sleeping
                 autonomousPhaseStartTime = now
                 autoTargetX = nil
-                // Do NOT refresh lastActivityTime — let updateVisuals trigger sleep naturally
                 return
             }
             // Keep mascot awake during the roam phase
             lastActivityTime = now
-
-            // Phantom apples: drop invisible lure every 15-30s to guide navigation
-            if !isSeekingApples && now >= autonomousNextTargetTime + 10
-                && apples.isEmpty && autoTargetX == nil && jumpPhase == .none {
-                dropPhantomApple()
-            }
 
             // Pick a new random destination when idle
             if autoTargetX == nil, !isSeekingApples, !mascot.isDragged, !mascot.isThrown, jumpPhase == .none {
                 if now >= autonomousNextTargetTime {
                     pickAutonomousWalkTarget(now: now)
                 }
-                // Random hops while walking (15% chance every 3-8s)
-            } else if autoTargetX != nil && jumpPhase == .none && !mascot.isDragged && !mascot.isThrown {
-                if Int.random(in: 0..<600) == 0 { // ~once per 10s at 60fps
+            }
+            // Random hops while walking (~every 5s)
+            if autoTargetX != nil && jumpPhase == .none && !mascot.isDragged && !mascot.isThrown {
+                if Int.random(in: 0..<300) == 0 {
                     startInPlaceJump()
                 }
+            }
+            // Force re-evaluate every 5s: if still on same spot, pick new target
+            if now >= autonomousNextTargetTime && autoTargetX == nil && jumpPhase == .none {
+                pickAutonomousWalkTarget(now: now)
             }
 
         case .sleeping:
@@ -112,52 +123,43 @@ extension AppController {
 
     func pickAutonomousWalkTarget(now: TimeInterval) {
         guard screenRight > screenLeft + 40 else { return }
-        autonomousNextTargetTime = now + Double.random(in: 1.5...5.0)
+        autonomousNextTargetTime = now + Double.random(in: 1.0...3.0) // faster cycling
 
-        // When on a window: 50% chance to LEAVE it
-        if level == .window, let petWin = petWindowFrame, Double.random(in: 0...1) < 0.5 {
-            // Cancel any apple seeking — leave takes priority
-            if isSeekingApples { endAppleSeek(now: now) }
-            // Remove phantom apples so they don't override the target
-            for i in (0..<apples.count).reversed() where apples[i].isPhantom {
-                apples[i].view.removeFromSuperview()
-                apples.remove(at: i)
-            }
-            // Target MUST be outside window bounds
-            let exitLeft = petWin.minX - CGFloat.random(in: 30...150)
-            let exitRight = petWin.maxX + CGFloat.random(in: 30...150)
-            let chosen = Bool.random() ? max(screenLeft, exitLeft) : min(screenRight, exitRight)
-            autoTargetX = chosen
-            return
-        }
-
-        // 15% chance: pick frontmost window edge to sit on
-        if Double.random(in: 0...1) < 0.15, let win = activeWindowFrame {
-            autoTargetX = Bool.random() ? win.minX + 8 : win.maxX - 8
-            return
+        // Cancel stale apple seeking
+        if isSeekingApples { endAppleSeek(now: now) }
+        for i in (0..<apples.count).reversed() where apples[i].isPhantom {
+            apples[i].view.removeFromSuperview()
+            apples.remove(at: i)
         }
 
         let roll = Double.random(in: 0...1)
 
-        // 40% — pick a point on the frontmost window
-        if roll < 0.40, let win = activeWindowFrame, win.width > 100 {
-            let margin: CGFloat = 30
-            let lo = win.minX + margin
-            let hi = win.maxX - margin
-            if lo < hi {
-                autoTargetX = CGFloat.random(in: lo...hi)
-                return
+        if level == .window, let petWin = petWindowFrame {
+            // ON A WINDOW: 60% leave, 20% edge sit, 20% walk on window
+            if roll < 0.60 {
+                // Leave window — target MUST be outside window bounds (even fullscreen)
+                let exit = Bool.random()
+                    ? petWin.minX - CGFloat.random(in: 40...200)  // can go below screenLeft
+                    : petWin.maxX + CGFloat.random(in: 40...200)  // can go above screenRight
+                autoTargetX = exit
+            } else if roll < 0.80 {
+                // Sit on edge
+                autoTargetX = Bool.random() ? petWin.minX + 5 : petWin.maxX - 5
+            } else {
+                // Walk on window
+                autoTargetX = CGFloat.random(in: petWin.minX + 20...petWin.maxX - 20)
+            }
+        } else {
+            // ON GROUND/DOCK: 50% climb to active window, 20% dock, 30% ground
+            if roll < 0.50, let win = activeWindowFrame, win.width > 80 {
+                let nearestEdge = abs(crabX - win.minX) < abs(crabX - win.maxX) ? win.minX : win.maxX
+                autoTargetX = nearestEdge
+            } else if roll < 0.70 && level != .dock && dockRight > dockLeft + 20 {
+                autoTargetX = CGFloat.random(in: dockLeft + 10...dockRight - 10)
+            } else {
+                autoTargetX = CGFloat.random(in: screenLeft...screenRight)
             }
         }
-
-        // 20% — target dock
-        if roll < 0.65 && level != .dock && dockRight > dockLeft + 20 {
-            autoTargetX = CGFloat.random(in: dockLeft + 10...dockRight - 10)
-            return
-        }
-
-        // 40% — random ground position
-        autoTargetX = CGFloat.random(in: screenLeft...screenRight)
     }
 
     func enterAutonomousMode(now: TimeInterval) {

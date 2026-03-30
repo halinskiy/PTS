@@ -65,6 +65,8 @@ final class MascotEntity {
 
     // Prevent re-landing on windows right after being thrown off
     var noWindowLandingUntil: TimeInterval = 0
+    // Grace period after landing on window — don't check obscured
+    var windowLandedAt: TimeInterval = 0
 
     // Wall climbing state
     var wallSide: Int = 0  // -1 left, +1 right, 0 none
@@ -91,8 +93,8 @@ final class MascotEntity {
     // Sleep
     var isAsleep = false
     var wakingUp = false
-    let drowsyDelay: TimeInterval = 3.0
-    let sleepDelay: TimeInterval = 5.0
+    let drowsyDelay: TimeInterval = 15.0
+    let sleepDelay: TimeInterval = 25.0
 
     // Apple seeking
     var isSeekingApples = false

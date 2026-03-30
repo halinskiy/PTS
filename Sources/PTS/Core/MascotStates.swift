@@ -540,10 +540,10 @@ final class ThrownState: MascotStateProtocol {
         // Window top collision — skip if recently thrown off a window (cooldown)
         let canLandOnWindows = CACurrentMediaTime() >= mascot.noWindowLandingUntil
         if mascot.velocityY < 0 && canLandOnWindows {
-            // Build candidate list: active window first, then all others
+            // Only land on top 5 visible windows (avoid background-Space windows)
             var candidates: [NSRect] = []
             if let active = ctrl.activeWindowFrame { candidates.append(active) }
-            for f in ctrl.visibleWindowFrames where !candidates.contains(f) { candidates.append(f) }
+            for f in ctrl.visibleWindowFrames.prefix(5) where !candidates.contains(f) { candidates.append(f) }
 
             for winFrame in candidates {
                 let winFloor = ctrl.computeWindowFloorY(for: winFrame)
@@ -557,8 +557,9 @@ final class ThrownState: MascotStateProtocol {
                     mascot.velocityX = 0
                     mascot.isThrown = false
                     mascot.level = .window
-                    ctrl.petWindowFrame = winFrame   // track the window pet is physically on
-                    ctrl.petWindowFloorY = winFloor  // WindowTracker keeps following frontmost separately
+                    ctrl.petWindowFrame = winFrame
+                    ctrl.petWindowFloorY = winFloor
+                    mascot.windowLandedAt = CACurrentMediaTime() // grace period
                     mascot.landingShakeTimer = 0.2
                     mascot.setExpression(.happy, duration: 1.5)
                     ctrl.stateMachine.forceTransition(to: StateKey.idle, mascot: mascot)
