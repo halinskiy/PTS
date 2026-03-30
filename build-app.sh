@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="PTS"
 DISPLAY_NAME="Pet in The System"
 BUNDLE_ID="com.pts.app"
-VERSION="2.5.0"
+VERSION="2.5.1"
 BUILD_DIR=".build/release"
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -19,6 +19,14 @@ mkdir -p "$CONTENTS/Resources"
 
 # Copy binary
 cp "$BUILD_DIR/$APP_NAME" "$CONTENTS/MacOS/$APP_NAME"
+
+# Copy Sparkle framework and set rpath
+mkdir -p "$CONTENTS/Frameworks"
+if [ -d "$BUILD_DIR/Sparkle.framework" ]; then
+    cp -R "$BUILD_DIR/Sparkle.framework" "$CONTENTS/Frameworks/Sparkle.framework"
+    # Add rpath so binary finds the framework
+    install_name_tool -add_rpath @executable_path/../Frameworks "$CONTENTS/MacOS/$APP_NAME" 2>/dev/null || true
+fi
 
 # Copy resource bundle
 RESOURCE_BUNDLE="${APP_NAME}_${APP_NAME}.bundle"
