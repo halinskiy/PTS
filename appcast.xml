@@ -22,8 +22,8 @@
       ]]></description>
       <enclosure
         url="https://github.com/halinskiy/PTS/releases/download/v2.5.0/PTS.zip"
-        sparkle:edSignature="uqg/iXIDZv+JLJmvmJdcoSHnViS51tX1NkM+MEDkbA77X8fQcQ7UQyQBAGFiA9RFTQpqQFtZ8NrCRWMY+pyPCg=="
-        length="247192"
+        sparkle:edSignature="CII4aV8pHhhBEo3wPLaqEFKdgfgy8snH7qLLBPGNNE2x7aUL4+j1DtGKGkJ67UAeXLXGjXr9dfA2ew0MjH0xCg=="
+        length="247193"
         type="application/octet-stream" />
       <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
     </item>
