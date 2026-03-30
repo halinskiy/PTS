@@ -242,7 +242,8 @@ final class SystemMonitor {
     }
 
     private func countNotificationWindows() -> Int {
-        let options = CGWindowListOption([.optionOnScreenOnly, .excludeDesktopElements])
+        // Count all Notification Centre windows (any layer) — banner creates a new one
+        let options = CGWindowListOption.optionOnScreenOnly
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return 0 }
         var count = 0
         for info in list {

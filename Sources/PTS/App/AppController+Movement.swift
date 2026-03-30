@@ -248,9 +248,8 @@ extension AppController {
                     }
                 }
             }
-            // Large mouse movements (>60px) count as real user activity
-            // Small movements don't reset autonomous timer (trackpad jitter, idle drift)
-            if abs(mouseX - pending) > 60 {
+            // Only very large mouse movements reset autonomous timer
+            if abs(mouseX - pending) > 200 {
                 if isAutonomousMode {
                     exitAutonomousMode(now: now)
                 } else {
@@ -377,17 +376,11 @@ extension AppController {
             let skipClimb = (isSeekingApples && currentAppleSeekTargetLevel() != .window)
                 || now < windowClimbCooldown
             if !skipClimb && (level == .ground || level == .dock) {
-                // Climb onto any of the top visible windows (current Space)
-                // Top 3 from visibleWindowFrames = frontmost windows = current Space
+                // Only climb onto activeWindowFrame (frontmost, guaranteed current Space)
                 var climbTarget: NSRect? = nil
-                let climbCandidates = Array(visibleWindowFrames.prefix(3)).filter {
-                    $0.width > 80 && $0.height > 80
-                }
-                // First check activeWindowFrame, then other visible windows
-                if let aw = activeWindowFrame, target >= aw.minX && target <= aw.maxX {
+                if let aw = activeWindowFrame, aw.width > 80, aw.height > 80,
+                   target >= aw.minX && target <= aw.maxX {
                     climbTarget = aw
-                } else {
-                    climbTarget = climbCandidates.first { target >= $0.minX && target <= $0.maxX }
                 }
                 if let winFrame = climbTarget {
                     let sideMargin: CGFloat = 40
@@ -999,8 +992,9 @@ extension AppController {
         let maxHeightDiff: CGFloat = 260
         let currentFloor = computeWindowFloorY(for: currentFrame)
 
-        // Top 3 visible windows = current Space
-        let candidates = Array(visibleWindowFrames.prefix(3)).filter { f in
+        // Only hop to activeWindowFrame (guaranteed current Space)
+        guard let aw = activeWindowFrame, aw != currentFrame, aw.width > 60 else { return nil }
+        let candidates = [aw].filter { f in
             guard f != currentFrame, f.width > 60 else { return false }
             // Window must be ahead in the right direction
             let gap: CGFloat = direction > 0

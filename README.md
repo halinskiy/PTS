@@ -1,6 +1,6 @@
 # PTS — Pet in The System
 
-A pixel-art desktop pet for macOS that lives in your interface — walks on windows, climbs their sides, sits on edges with dangling legs, reacts to notifications, apps, and cursor, and explores autonomously.
+A pixel-art desktop pet for macOS that lives in your interface — walks on the active window, climbs its sides, sits on edges with dangling legs, reacts to notifications, and explores autonomously.
 
 ## Install
 
@@ -12,52 +12,37 @@ A pixel-art desktop pet for macOS that lives in your interface — walks on wind
    xattr -cr /Applications/PTS.app
    ```
 
-### Required Permissions
-- **Accessibility** — needed for window tracking (riding windows, climbing, reacting to window movement)
-
 ## Features
 
 ### Movement & Physics
 - Walks along screen edges, dock, and window tops
-- Climbs up and down window sides, hangs on walls
+- Climbs up and down the active window's sides
 - Sits on window edges with legs dangling
-- Jumps between adjacent windows in the same Space
 - Drag & throw with heavy physics (gravity, air resistance, bounce)
-- Lands on any visible window when thrown
-- Falls off when you move a window — won't re-land for 1.5s
+- Falls off when you move a window
 - Screen wrapping on ground (walks off one edge, appears on the other)
-- Smooth walk deceleration (easing at endpoints)
-- Leaves tiny footprints that fade after 3 seconds
+- Smooth walk deceleration
 
 ### Autonomous Behavior
-- After 1 min idle (no mouse >60px), explores the interface
-- Targets windows in current Space only (top 3 z-order)
-- Phantom apples: invisible lures spawn to guide navigation
-- 50% chance to leave current window per target
+- After 10s of no major mouse movement, starts exploring
+- Walks between ground, dock, and the active window
+- Phantom apples guide navigation to different surfaces
+- 50% chance to leave current window each cycle
 - Walks 5 min, sleeps 1 min, repeats
-- Idle micro-animations: looks around, yawns, stretches, hops, taps foot
-- Animation variety depends on mood (tired → yawns, ecstatic → hops)
+- Idle micro-animations: yawns, stretches, hops, looks around
 
-### Reactions & Intelligence
+### Reactions
 - **Notifications**: jumps/falls scared when any macOS notification appears
 - **Apps**: excited for Xcode/VS Code, happy for Slack/Discord, thinking for browsers
-- **Body language**: "types" for code editors, sways for music, watches browsers
-- **Cursor**: flinches on fast flyby, approaches to "sniff" idle cursor
+- **Cursor**: flinches on fast flyby, approaches idle cursor to sniff
 - **Time of day**: energetic mornings, sleepy nights
-- **Battery/Dark mode**: reacts to low power and theme changes
 - **Claude Code**: detects running Claude, shows thinking expressions
-- **Window z-order**: hides behind foreground windows, sleeps on background windows
 
 ### Pet System
 - 11 expressions, 8 mood states, 7 particle effects
-- Progression: tracks days alive, interactions, apples eaten, trust level (0-100)
+- Progression: trust level, days alive, apples eaten
 - Orange default tint with 9 color presets
 - Feed apples with Option+F
-- Self-replication (rare, max 3 instances)
-
-### Rendering
-- CADisplayLink (macOS 14+) / Timer fallback
-- Pixel-art with real-time scale, rotation, expression blending
 
 ## Build
 

@@ -10,7 +10,7 @@ extension AppController {
     var autonomousIdleThreshold: TimeInterval {
         let saved = UserDefaults.standard.double(forKey: "mascotAutoWalkDelay")
         if saved < 0 { return -1 }          // Never
-        return saved > 0 ? saved : 60.0     // default 1 min
+        return saved > 0 ? saved : 10.0     // default 10 sec
     }
 
     // MARK: Lifecycle
@@ -114,36 +114,33 @@ extension AppController {
         guard screenRight > screenLeft + 40 else { return }
         autonomousNextTargetTime = now + Double.random(in: 1.5...5.0)
 
-        // Top 3 visible windows = current Space windows
-        let currentSpaceWindows = Array(visibleWindowFrames.prefix(3)).filter {
-            $0.width > 100 && $0.height > 80
-        }
-
-        // When on a window: 50% chance to LEAVE it (go to another window/ground/dock)
+        // When on a window: 50% chance to LEAVE it
         if level == .window, let petWin = petWindowFrame, Double.random(in: 0...1) < 0.5 {
-            let otherWindows = currentSpaceWindows.filter { abs($0.midX - petWin.midX) > 80 }
-            if let other = otherWindows.randomElement(), Double.random(in: 0...1) < 0.6 {
-                // Jump to another window
-                autoTargetX = CGFloat.random(in: other.minX + 20...other.maxX - 20)
-            } else {
-                // Go to ground
-                autoTargetX = Bool.random()
-                    ? CGFloat.random(in: screenLeft...max(screenLeft + 50, petWin.minX - 80))
-                    : CGFloat.random(in: min(screenRight - 50, petWin.maxX + 80)...screenRight)
+            // Cancel any apple seeking — leave takes priority
+            if isSeekingApples { endAppleSeek(now: now) }
+            // Remove phantom apples so they don't override the target
+            for i in (0..<apples.count).reversed() where apples[i].isPhantom {
+                apples[i].view.removeFromSuperview()
+                apples.remove(at: i)
             }
+            // Target MUST be outside window bounds
+            let exitLeft = petWin.minX - CGFloat.random(in: 30...150)
+            let exitRight = petWin.maxX + CGFloat.random(in: 30...150)
+            let chosen = Bool.random() ? max(screenLeft, exitLeft) : min(screenRight, exitRight)
+            autoTargetX = chosen
             return
         }
 
-        // 15% chance: pick a window edge to sit on
-        if Double.random(in: 0...1) < 0.15, let win = currentSpaceWindows.randomElement() {
+        // 15% chance: pick frontmost window edge to sit on
+        if Double.random(in: 0...1) < 0.15, let win = activeWindowFrame {
             autoTargetX = Bool.random() ? win.minX + 8 : win.maxX - 8
             return
         }
 
         let roll = Double.random(in: 0...1)
 
-        // 40% — pick a point on a visible window in current Space
-        if roll < 0.40, let win = currentSpaceWindows.randomElement() {
+        // 40% — pick a point on the frontmost window
+        if roll < 0.40, let win = activeWindowFrame, win.width > 100 {
             let margin: CGFloat = 30
             let lo = win.minX + margin
             let hi = win.maxX - margin
