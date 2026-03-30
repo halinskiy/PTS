@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Pet in The System Updates</title>
+    <link>https://github.com/halinskiy/PTS</link>
+    <description>Updates for PTS</description>
+    <language>en</language>
+    <item>
+      <title>Version 2.5.0</title>
+      <sparkle:version>2.5.0</sparkle:version>
+      <sparkle:shortVersionString>2.5.0</sparkle:shortVersionString>
+      <pubDate>Sun, 30 Mar 2026 15:15:00 +0000</pubDate>
+      <description><![CDATA[
+        <h2>PTS v2.5.0 — Sparkle Auto-Updates</h2>
+        <ul>
+          <li>Automatic updates via Sparkle — no more manual downloads</li>
+          <li>Window-to-window hopping with cooldown</li>
+          <li>Fixed bounce loops and cross-Space window targeting</li>
+          <li>Longer awake time, faster autonomous mode</li>
+          <li>Notification reactions, app-specific animations</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/halinskiy/PTS/releases/download/v2.5.0/PTS.zip"
+        sparkle:edSignature="uqg/iXIDZv+JLJmvmJdcoSHnViS51tX1NkM+MEDkbA77X8fQcQ7UQyQBAGFiA9RFTQpqQFtZ8NrCRWMY+pyPCg=="
+        length="247192"
+        type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+    </item>
+  </channel>
+</rss>

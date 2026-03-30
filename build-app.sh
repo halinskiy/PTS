@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="PTS"
 DISPLAY_NAME="Pet in The System"
 BUNDLE_ID="com.pts.app"
-VERSION="2.4.0"
+VERSION="2.5.0"
 BUILD_DIR=".build/release"
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -54,6 +54,10 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/halinskiy/PTS/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>2Ne7z6Ps8wOBB0xFredP5la4nQbr61Gpn0vh8f3YOyo=</string>
 </dict>
 </plist>
 PLIST
