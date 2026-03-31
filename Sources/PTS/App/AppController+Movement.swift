@@ -58,6 +58,8 @@ extension AppController {
 
 
 
+
+
         // --- Dynamic mouse interaction toggle ---
         // Enable mouse events on our window ONLY when cursor is near the mascot
         // or an apple.  This lets clicks pass through everywhere else.
@@ -87,14 +89,8 @@ extension AppController {
             lastVisibleWindowsCheck = now
             visibleWindowFrames = WindowInfo.getAllFrames()
 
-            // Update activeWindowFrame from CGWindowList (front-to-back order)
-            // If pet is on a window, prefer a DIFFERENT window so hop can trigger
-            let bigWindows = visibleWindowFrames.filter { $0.width > 100 && $0.height > 100 }
-            if let petWin = petWindowFrame,
-               let other = bigWindows.first(where: { abs($0.midX - petWin.midX) > 80 || abs($0.midY - petWin.midY) > 80 }) {
-                activeWindowFrame = other
-                windowFloorY = computeWindowFloorY(for: other)
-            } else if let first = bigWindows.first {
+            // activeWindowFrame = first large visible window (frontmost in current Space)
+            if let first = visibleWindowFrames.first(where: { $0.width > 100 && $0.height > 100 }) {
                 activeWindowFrame = first
                 windowFloorY = computeWindowFloorY(for: first)
             }
@@ -140,7 +136,7 @@ extension AppController {
             // Apply mood + time-of-day to walk speed
             let moodMultiplier = moodSystem.overallMood.walkSpeedMultiplier
             let timeMultiplier = TimeOfDay.current.walkSpeedMultiplier
-            mascot.walkSpeed = 200 * CGFloat(moodMultiplier) * CGFloat(timeMultiplier)
+            mascot.walkSpeed = 120 * CGFloat(moodMultiplier) * CGFloat(timeMultiplier)
 
             // Mood-based idle expression (only if no active expression)
             if mascot.expressionDuration == 0 && mascot.currentExpression == .neutral {
@@ -162,11 +158,13 @@ extension AppController {
             particleSystem?.emitSleepZ(at: CGPoint(x: crabX, y: crabY + spriteH * 0.8))
         }
 
-        // Window inertia: horizontal slide when window moves fast
-        if abs(windowInertiaVelocity.dx) > 0.5 {
+        // Window inertia: horizontal slide (only on ground/dock, not windows)
+        if level != .window && abs(windowInertiaVelocity.dx) > 0.5 {
             crabX += windowInertiaVelocity.dx * dt
             windowInertiaVelocity.dx *= windowInertiaDecay
             if abs(windowInertiaVelocity.dx) < 0.5 { windowInertiaVelocity.dx = 0 }
+        } else if level == .window {
+            windowInertiaVelocity = .zero
         }
 
         let mouseLocation = NSEvent.mouseLocation
@@ -385,7 +383,6 @@ extension AppController {
             // Window Climbing Detection — skip when chasing apple or in cooldown
             let skipClimb = (isSeekingApples && currentAppleSeekTargetLevel() != .window)
                 || now < windowClimbCooldown
-                || now < failedClimbCooldownUntil  // too many failed attempts
             if !skipClimb && (level == .ground || level == .dock) {
                 // Only climb onto activeWindowFrame
                 var climbTarget: NSRect? = nil
@@ -420,19 +417,8 @@ extension AppController {
                 }
             }
 
-            // Window-to-window: hop to a different window (with cooldown to prevent loop)
-            if level == .window && now > windowClimbCooldown, let petWin = petWindowFrame {
-                // If activeWindowFrame is different → hop to it
-                if let aw = activeWindowFrame,
-                   abs(aw.midX - petWin.midX) > 100 || abs(aw.midY - petWin.midY) > 100 {
-                    let dir: CGFloat = aw.midX > crabX ? 1 : -1
-                    windowClimbCooldown = now + 5.0  // don't hop again for 5s
-                    hopToWindow(aw, direction: dir)
-                    updateVisuals(dt, isWalking: false)
-                    positionSprite()
-                    return
-                }
-            }
+            // Window-to-window hop is handled by onWindowChanged callback only
+            // (when user actually switches apps/windows)
 
             if level == .window, let winFrame = petWindowFrame ?? activeWindowFrame {
                 let appleOnLowerLevel = isSeekingApples && currentAppleSeekTargetLevel() != .window
@@ -508,10 +494,6 @@ extension AppController {
                     )
                 }
 
-                // Footprints every ~40px
-                if Int(abs(crabX)) % 40 < 3 {
-                    particleSystem?.emitFootprint(at: CGPoint(x: crabX, y: crabY))
-                }
 
                 // Screen wrapping (snake-style) on ground level
                 if level == .ground {
@@ -604,8 +586,29 @@ extension AppController {
         if level == .window {
             crabY = petWindowFloorY
             if let petWin = petWindowFrame {
-                if crabX < petWin.minX - 2 { crabX = petWin.minX - 2 }
-                if crabX > petWin.maxX + 2 { crabX = petWin.maxX + 2 }
+                if crabX < petWin.minX - 20 { crabX = petWin.minX - 20 }
+                if crabX > petWin.maxX + 20 { crabX = petWin.maxX + 20 }
+
+                // Check: is pet's window the topmost at pet's position?
+                // If another window covers the pet → jump off with animation
+                if !mascot.isThrown && jumpPhase == .none && !mascot.isAsleep {
+                    let petCenter = CGPoint(x: crabX, y: crabY + spriteH * 0.5)
+                    for f in visibleWindowFrames.prefix(3) {
+                        if f.contains(petCenter) {
+                            let isOurWindow = abs(f.origin.x - petWin.origin.x) < 10
+                                && abs(f.origin.y - petWin.origin.y) < 10
+                            if !isOurWindow {
+                                mascot.velocityX = CGFloat.random(in: -80...80)
+                                mascot.velocityY = 300
+                                mascot.noWindowLandingUntil = CACurrentMediaTime() + 2.5
+                                windowClimbCooldown = CACurrentMediaTime() + 2.5
+                                mascot.setExpression(.surprised)
+                                stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
+                            }
+                            break
+                        }
+                    }
+                }
             }
         }
 
@@ -726,7 +729,6 @@ extension AppController {
                 petWindowFrame = activeWindowFrame
                 petWindowFloorY = windowFloorY
                 mascot.windowLandedAt = CACurrentMediaTime()
-                failedClimbCount = 0  // successful landing
                 claudeView.armsRaised = false
                 claudeView.currentLegs = legsIdle
                 claudeView.rotation = 0
@@ -969,27 +971,6 @@ extension AppController {
             if !isTopWindow { shouldHide = true }
         }
         claudeView.alphaValue = shouldHide ? 0 : 1
-        // No more isPetObscuredByForegroundWindow throw — failedClimbCooldown handles bad windows
-    }
-
-    /// Check if any visible window in front of the pet's window covers the pet's position.
-    /// visibleWindowFrames is ordered front-to-back (from CGWindowListCopyWindowInfo).
-    func isPetObscuredByForegroundWindow() -> Bool {
-        guard level == .window || mascot.isThrown, let petWin = petWindowFrame else { return false }
-        let petPoint = CGPoint(x: crabX, y: crabY + spriteH * 0.5)
-
-        for f in visibleWindowFrames {
-            // Found our window first → pet is on top, not obscured
-            if abs(f.midX - petWin.midX) < 50 && abs(f.midY - petWin.midY) < 50
-                && abs(f.width - petWin.width) < 50 {
-                return false
-            }
-            // Another window covers the pet's position → obscured
-            if f.contains(petPoint) {
-                return true
-            }
-        }
-        return false
     }
 
     func currentShadowFloorY() -> CGFloat {

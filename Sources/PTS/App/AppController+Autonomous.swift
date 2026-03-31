@@ -88,16 +88,6 @@ extension AppController {
                     pickAutonomousWalkTarget(now: now)
                 }
             }
-            // Random hops while walking (~every 5s)
-            if autoTargetX != nil && jumpPhase == .none && !mascot.isDragged && !mascot.isThrown {
-                if Int.random(in: 0..<300) == 0 {
-                    startInPlaceJump()
-                }
-            }
-            // Force re-evaluate every 5s: if still on same spot, pick new target
-            if now >= autonomousNextTargetTime && autoTargetX == nil && jumpPhase == .none {
-                pickAutonomousWalkTarget(now: now)
-            }
 
         case .sleeping:
             if now - autonomousPhaseStartTime >= 60 {  // sleep only 1 minute
@@ -123,7 +113,7 @@ extension AppController {
 
     func pickAutonomousWalkTarget(now: TimeInterval) {
         guard screenRight > screenLeft + 40 else { return }
-        autonomousNextTargetTime = now + Double.random(in: 1.0...3.0) // faster cycling
+        autonomousNextTargetTime = now + Double.random(in: 3.0...6.0)
 
         // Cancel stale apple seeking
         if isSeekingApples { endAppleSeek(now: now) }
@@ -135,18 +125,19 @@ extension AppController {
         let roll = Double.random(in: 0...1)
 
         if level == .window, let petWin = petWindowFrame {
-            // ON A WINDOW: 60% leave, 20% edge sit, 20% walk on window
-            if roll < 0.60 {
-                // Leave window — target MUST be outside window bounds (even fullscreen)
+            // ON A WINDOW: only leave after 10s on this window
+            let timeOnWindow = now - mascot.windowLandedAt
+            if roll < 0.25 && timeOnWindow > 10 {
+                // 25% leave (only after 10s) — target outside bounds
                 let exit = Bool.random()
-                    ? petWin.minX - CGFloat.random(in: 40...200)  // can go below screenLeft
-                    : petWin.maxX + CGFloat.random(in: 40...200)  // can go above screenRight
+                    ? petWin.minX - CGFloat.random(in: 40...200)
+                    : petWin.maxX + CGFloat.random(in: 40...200)
                 autoTargetX = exit
-            } else if roll < 0.80 {
-                // Sit on edge
+            } else if roll < 0.40 {
+                // 15% sit on edge
                 autoTargetX = Bool.random() ? petWin.minX + 5 : petWin.maxX - 5
             } else {
-                // Walk on window
+                // 60% walk on window
                 autoTargetX = CGFloat.random(in: petWin.minX + 20...petWin.maxX - 20)
             }
         } else {

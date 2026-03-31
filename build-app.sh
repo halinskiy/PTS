@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="PTS"
 DISPLAY_NAME="Pet in The System"
 BUNDLE_ID="com.pts.app"
-VERSION="2.5.1"
+VERSION="2.5.2"
 BUILD_DIR=".build/release"
 APP_DIR="$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"

@@ -656,6 +656,18 @@ final class WallClimbState: MascotStateProtocol {
     func update(dt: CGFloat, mascot: MascotEntity) {
         guard let ctrl = controller else { return }
 
+        // Check window still exists — if closed/moved, fall off
+        let windowExists = ctrl.visibleWindowFrames.contains {
+            abs($0.origin.x - windowFrame.origin.x) < 10 && abs($0.origin.y - windowFrame.origin.y) < 10
+        }
+        if !windowExists {
+            mascot.velocityX = 0
+            mascot.velocityY = 100
+            mascot.setExpression(.surprised)
+            ctrl.stateMachine.forceTransition(to: StateKey.thrown, mascot: mascot)
+            return
+        }
+
         let climbSpeed: CGFloat = 280
 
         // Keep X snapped to wall side
