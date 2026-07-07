@@ -6,6 +6,21 @@
     <description>Updates for PTS</description>
     <language>en</language>
     <item>
+      <title>Version 2.6.1</title>
+      <sparkle:version>2.6.1</sparkle:version>
+      <sparkle:shortVersionString>2.6.1</sparkle:shortVersionString>
+      <pubDate>Tue, 07 Jul 2026 14:46:19 +0000</pubDate>
+      <description><![CDATA[
+        <h2>PTS v2.6.1</h2>
+        <ul><li>Reliability and performance improvements</li></ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/halinskiy/PTS/releases/download/v2.6.1/PTS-2.6.1.zip"
+        sparkle:edSignature="U4+41Hg8H7fQsahpE1Ch1nSkOO4hzRfgSObG65SJo6gojd0qqbGvz5L9m5jae2Ecep4+Yaf3sxaDcTt5tpBrDQ==" length="1322811"
+        type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+    </item>
+    <item>
       <title>Version 2.5.2</title>
       <sparkle:version>2.5.2</sparkle:version>
       <sparkle:shortVersionString>2.5.2</sparkle:shortVersionString>
